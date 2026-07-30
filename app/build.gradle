@@ -42,7 +42,11 @@ dependencies {
 
     // Binary AndroidManifest.xml (AXML) reader/writer — lets us rewrite the
     // package name and provider authorities without a full apktool decompile.
-    implementation 'pxb.android:axml:2.0.4'
+    // Note: this is published as de.upb.cs.swt:axml on Maven Central (a
+    // maintained fork of the original pxb.android:axml, which was never
+    // published there). The Java package is still pxb.android.axml, so no
+    // source changes are needed.
+    implementation 'de.upb.cs.swt:axml:2.1.3'
 
     // APK v2/v3 signing, straight from AOSP's apksigner sources.
     implementation 'com.android.tools.build:apksig:8.4.1'
