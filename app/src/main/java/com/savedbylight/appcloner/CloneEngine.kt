@@ -26,8 +26,8 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 /**
  * Clones an installed app by:
  *   1. Copying its APK out of /data/app
- *   2. Rewriting the package name (and provider authorities) inside the
- *      binary AndroidManifest.xml, using the AXML format directly.
+ *   2. Rewriting the package name (and all matching permissions/authorities) inside the
+ *      binary AndroidManifest.xml using the AXML format directly.
  *   3. Re-zipping and signing with a freshly generated key.
  *   4. Handing the result to the system installer.
  */
@@ -75,6 +75,7 @@ class CloneEngine(private val context: Context) {
                         entry.name.startsWith("META-INF/") && (entry.name.endsWith(".SF") ||
                                 entry.name.endsWith(".RSA") || entry.name.endsWith(".DSA"))
                     ) {
+                        // Drop original signature block
                         continue
                     } else {
                         zos.putNextEntry(ZipEntry(entry.name))
@@ -118,15 +119,14 @@ class CloneEngine(private val context: Context) {
             val safeNs = ns ?: ""
             var newValue = value
 
-            // TYPE_STRING in AXML is 0x03. Guard against null string values
+            // TYPE_STRING in AXML is 0x03. Guard against null string values to prevent NPEs in AxmlWriter
             if (type == 0x03 && newValue == null) {
                 newValue = ""
             }
 
+            // Replace all string attribute occurrences of the package name (packages, authorities, permissions, etc.)
             if (newValue is String && newValue.contains(oldPkg)) {
-                if (name == "package" || name == "authorities" || name == "name" || name == "process") {
-                    newValue = newValue.replace(oldPkg, newPkg)
-                }
+                newValue = newValue.replace(oldPkg, newPkg)
             }
             super.attr(safeNs, name, resourceId, type, newValue)
         }
