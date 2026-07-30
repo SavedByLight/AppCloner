@@ -27,21 +27,9 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
  * Clones an installed app by:
  *   1. Copying its APK out of /data/app
  *   2. Rewriting the package name (and provider authorities) inside the
- *      binary AndroidManifest.xml, using the AXML format directly — no
- *      apktool/decompile round-trip needed for this specific edit.
- *   3. Re-zipping and signing with a freshly generated key, since the
- *      original signature is now invalid for the modified bytes.
+ *      binary AndroidManifest.xml, using the AXML format directly.
+ *   3. Re-zipping and signing with a freshly generated key.
  *   4. Handing the result to the system installer.
- *
- * Known limitations:
- *  - Apps that check BuildConfig.APPLICATION_ID at runtime, use Play
- *    Integrity/SafetyNet, or pin their own signature will detect the clone
- *    and may refuse to run.
- *  - Apps with native libraries that hardcode the package name (rare) won't
- *    be fixed by this pass.
- *  - This does not touch resources.arsc; only apps that dynamically compute
- *    authorities/permissions from the package name at the manifest level are
- *    handled here.
  */
 class CloneEngine(private val context: Context) {
 
@@ -68,9 +56,6 @@ class CloneEngine(private val context: Context) {
         return signedApk
     }
 
-    /** Reads AndroidManifest.xml out of the APK, swaps the package name and
-     *  any provider authorities that start with it, and writes a new APK
-     *  with everything else copied through unchanged. */
     private fun rewriteManifest(inputApk: File, outputApk: File, oldPkg: String, newPkg: String) {
         ZipFile(inputApk).use { zip ->
             val manifestEntry = zip.getEntry("AndroidManifest.xml")
@@ -90,7 +75,6 @@ class CloneEngine(private val context: Context) {
                         entry.name.startsWith("META-INF/") && (entry.name.endsWith(".SF") ||
                                 entry.name.endsWith(".RSA") || entry.name.endsWith(".DSA"))
                     ) {
-                        // Drop the original signing block — we're re-signing from scratch
                         continue
                     } else {
                         zos.putNextEntry(ZipEntry(entry.name))
@@ -110,8 +94,13 @@ class CloneEngine(private val context: Context) {
         Logger.log("AXML: walking nodes to rewrite package/authorities")
         reader.accept(object : AxmlVisitor(writer) {
             override fun child(ns: String?, name: String?): NodeVisitor {
-                val superVisitor = super.child(ns, name)
+                val safeNs = ns ?: ""
+                val superVisitor = super.child(safeNs, name)
                 return RewritingNodeVisitor(superVisitor, oldPkg, newPkg)
+            }
+
+            override fun ns(prefix: String?, uri: String?, line: Int) {
+                super.ns(prefix ?: "", uri ?: "", line)
             }
         })
 
@@ -119,9 +108,6 @@ class CloneEngine(private val context: Context) {
         return writer.toByteArray()
     }
 
-    /** Recursively walks manifest nodes, rewriting the "package" attribute on
-     *  <manifest>, and "android:authorities" on <provider> so cloned apps
-     *  don't collide with the original's ContentProvider authorities. */
     private class RewritingNodeVisitor(
         parent: NodeVisitor,
         private val oldPkg: String,
@@ -129,9 +115,10 @@ class CloneEngine(private val context: Context) {
     ) : NodeVisitor(parent) {
 
         override fun attr(ns: String?, name: String?, resourceId: Int, type: Int, value: Any?) {
+            val safeNs = ns ?: ""
             var newValue = value
 
-            // TYPE_STRING in AXML is 0x03. Guard against null string values to avoid NPEs in AxmlWriter.
+            // TYPE_STRING in AXML is 0x03. Guard against null string values
             if (type == 0x03 && newValue == null) {
                 newValue = ""
             }
@@ -141,16 +128,15 @@ class CloneEngine(private val context: Context) {
                     newValue = newValue.replace(oldPkg, newPkg)
                 }
             }
-            super.attr(ns, name, resourceId, type, newValue)
+            super.attr(safeNs, name, resourceId, type, newValue)
         }
 
         override fun child(ns: String?, name: String?): NodeVisitor {
-            return RewritingNodeVisitor(super.child(ns, name), oldPkg, newPkg)
+            val safeNs = ns ?: ""
+            return RewritingNodeVisitor(super.child(safeNs, name), oldPkg, newPkg)
         }
     }
 
-    /** Generates a throwaway self-signed key and signs the rewritten APK
-     *  with apksig (v2+v3), matching how apksigner does it on the CLI. */
     private fun signApk(inputApk: File, outputApk: File) {
         val keyPairGen = KeyPairGenerator.getInstance("RSA")
         keyPairGen.initialize(2048)
