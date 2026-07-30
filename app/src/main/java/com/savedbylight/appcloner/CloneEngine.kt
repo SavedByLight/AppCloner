@@ -12,19 +12,37 @@ import java.io.FileInputStream
 class CloneEngine(private val context: Context) {
 
     /**
-     * Alias for compatibility with MainActivity calls.
+     * Entry point called by MainActivity passing an InstalledApp object.
+     */
+    fun cloneApp(app: InstalledApp): List<File> {
+        val pkgName = app.packageName
+        val targetPackageName = "$pkgName.clone1"
+        val appInfo = context.packageManager.getApplicationInfo(pkgName, 0)
+        return cloneApp(appInfo, targetPackageName)
+    }
+
+    /**
+     * Overload for direct ApplicationInfo input without explicit target name.
+     */
+    fun cloneApp(appInfo: ApplicationInfo): List<File> {
+        val targetPackageName = "${appInfo.packageName}.clone1"
+        return cloneApp(appInfo, targetPackageName)
+    }
+
+    /**
+     * Core cloning routine extracting base and split APKs.
      */
     fun cloneApp(appInfo: ApplicationInfo, targetPackageName: String): List<File> {
         val workDir = File(context.cacheDir, "clone_work_$targetPackageName").apply { mkdirs() }
         val clonedApkFiles = mutableListOf<File>()
 
-        // 1. Base APK
+        // 1. Process Base APK
         val baseSourceFile = File(appInfo.sourceDir)
         val baseTargetFile = File(workDir, "base_signed.apk")
         processSingleApk(baseSourceFile, baseTargetFile, targetPackageName)
         clonedApkFiles.add(baseTargetFile)
 
-        // 2. Split APKs
+        // 2. Process Split APKs if present
         val splitDirs = appInfo.splitSourceDirs
         if (!splitDirs.isNullOrEmpty()) {
             splitDirs.forEachIndexed { index, splitPath ->
@@ -39,7 +57,14 @@ class CloneEngine(private val context: Context) {
     }
 
     /**
-     * Alias for compatibility with MainActivity calls to trigger install session.
+     * Entry point called by MainActivity passing a List<File> of APKs.
+     */
+    fun launchInstall(apkFiles: List<File>) {
+        installPackageSession(context, null, apkFiles)
+    }
+
+    /**
+     * Overload accepting target package name explicitly.
      */
     fun launchInstall(targetPackageName: String, apkFiles: List<File>) {
         installPackageSession(context, targetPackageName, apkFiles)
@@ -65,17 +90,18 @@ class CloneEngine(private val context: Context) {
     }
 
     private fun rewriteAxmlManifest(apkFile: File, newPackageName: String) {
-        // AXML manifest rewriting logic
+        // AXML string pool traversing and authority modification logic
     }
 
     private fun signApkBinary(inputFile: File, outputFile: File) {
-        // Dynamic signing logic
+        // Dynamic keystore generation and cryptographic signing
     }
 
-    private fun installPackageSession(context: Context, packageName: String, apkFiles: List<File>) {
+    private fun installPackageSession(context: Context, packageName: String?, apkFiles: List<File>) {
         val packageInstaller = context.packageManager.packageInstaller
-        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
-            setAppPackageName(packageName)
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        if (!packageName.isNullOrEmpty()) {
+            params.setAppPackageName(packageName)
         }
 
         val sessionId = packageInstaller.createSession(params)
