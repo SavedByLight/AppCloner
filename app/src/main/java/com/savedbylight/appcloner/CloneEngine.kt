@@ -103,9 +103,11 @@ class CloneEngine(private val context: Context) {
     }
 
     private fun rewritePackageInAxml(manifestBytes: ByteArray, oldPkg: String, newPkg: String): ByteArray {
+        Logger.log("AXML: parsing manifest (${manifestBytes.size} bytes)")
         val reader = AxmlReader(manifestBytes)
         val writer = AxmlWriter()
 
+        Logger.log("AXML: walking nodes to rewrite package/authorities")
         reader.accept(object : AxmlVisitor(writer) {
             override fun child(ns: String?, name: String?): NodeVisitor {
                 val superVisitor = super.child(ns, name)
@@ -113,6 +115,7 @@ class CloneEngine(private val context: Context) {
             }
         })
 
+        Logger.log("AXML: serializing rewritten manifest")
         return writer.toByteArray()
     }
 

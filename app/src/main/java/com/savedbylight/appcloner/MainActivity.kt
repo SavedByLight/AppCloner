@@ -73,7 +73,7 @@ class MainActivity : AppCompatActivity() {
                 CloneEngine(this@MainActivity).launchInstall(resultApk)
             } catch (e: Exception) {
                 progressBar.visibility = View.GONE
-                Logger.log("ERROR cloning ${app.packageName}: ${e.message}")
+                Logger.log("ERROR cloning ${app.packageName}: ${e.message}\n${e.stackTraceToString()}")
                 Toast.makeText(
                     this@MainActivity,
                     "Clone failed: ${e.message}",
