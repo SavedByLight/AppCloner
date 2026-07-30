@@ -1,9 +1,13 @@
 package com.savedbylight.appcloner
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.ListView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 
 class LogActivity : AppCompatActivity() {
@@ -16,6 +20,7 @@ class LogActivity : AppCompatActivity() {
 
         listView = findViewById(R.id.logListView)
         val clearButton = findViewById<Button>(R.id.clearLogButton)
+        val copyButton = findViewById<Button>(R.id.copyLogButton)
 
         refreshList()
 
@@ -23,6 +28,17 @@ class LogActivity : AppCompatActivity() {
             Logger.clear()
             refreshList()
         }
+
+        copyButton.setOnClickListener {
+            copyLogToClipboard()
+        }
+    }
+
+    private fun copyLogToClipboard() {
+        val text = Logger.all().joinToString("\n")
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Clone Log", text))
+        Toast.makeText(this, "Log copied to clipboard", Toast.LENGTH_SHORT).show()
     }
 
     private fun refreshList() {
