@@ -1,20 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+    package="com.savedbylight.appcloner">
 
-    <!-- To see every installed app, not just ones we'd normally be visible to -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
-
-    <!-- To trigger installation of the rewritten APK -->
+    <!-- System and Installation Permissions -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <application
-        android:allowBackup="false"
+        android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="App Cloner"
-        android:theme="@style/Theme.AppCloner"
-        android:requestLegacyExternalStorage="false">
+        android:label="AppCloner"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppCloner">
 
         <activity
             android:name=".MainActivity"
@@ -27,13 +26,11 @@
 
         <activity
             android:name=".LogActivity"
-            android:exported="false"
-            android:label="Clone Log" />
+            android:exported="false" />
 
-        <!-- Needed to hand the rewritten APK file to the package installer on API 24+ -->
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
+            android:authorities="com.savedbylight.appcloner.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data
@@ -42,4 +39,5 @@
         </provider>
 
     </application>
+
 </manifest>
