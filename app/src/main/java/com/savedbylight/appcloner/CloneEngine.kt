@@ -130,11 +130,12 @@ class CloneEngine(private val context: Context) {
 
         override fun attr(ns: String?, name: String?, resourceId: Int, type: Int, value: Any?) {
             var newValue = value
-            // If the attribute is a string and the value is null, replace with empty string
-            // to avoid NPE in StringItems.prepare() during serialization.
-            if (type == 0x03 && value == null) {
+
+            // TYPE_STRING in AXML is 0x03. Guard against null string values to avoid NPEs in AxmlWriter.
+            if (type == 0x03 && newValue == null) {
                 newValue = ""
             }
+
             if (newValue is String && newValue.contains(oldPkg)) {
                 if (name == "package" || name == "authorities" || name == "name" || name == "process") {
                     newValue = newValue.replace(oldPkg, newPkg)
