@@ -25,6 +25,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".LogActivity"
+            android:exported="false"
+            android:label="Clone Log" />
+
         <!-- Needed to hand the rewritten APK file to the package installer on API 24+ -->
         <provider
             android:name="androidx.core.content.FileProvider"

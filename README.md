@@ -25,6 +25,13 @@ is: **make a second app that Android thinks is a completely different app.**
 5. Hand the signed APK to the system installer via a `FileProvider` +
    `ACTION_VIEW` intent, same as installing any APK.
 
+Every step logs to an in-app **Log page** (`View Logs` button on the main
+screen → `LogActivity`) — a persistent, timestamped record of each clone
+attempt (copy → manifest rewrite → sign → install trigger, or the error if
+one of those steps fails), backed by `Logger.kt`, which keeps entries in
+memory and appends them to `filesDir/clone_log.txt` so history survives an
+app restart.
+
 ## Building it
 
 ```
@@ -67,19 +74,16 @@ using for TWRP/LineageOS Soong builds.
 
 - **Every push/PR to `main`** — builds a debug APK and uploads it as a
   workflow artifact (`Actions` tab → run → `AppCloner-debug-apk`).
-- **Pushing a tag like `v0.1.0`** — builds the APK again and creates a
-  GitHub Release on that tag with the APK attached, using
-  `softprops/action-gh-release`. Release notes are auto-generated from
-  commits since the last tag.
+- **Every push directly to `main`** (not PRs) — additionally creates a new
+  GitHub Release automatically, no manual tagging needed. It generates a
+  tag like `v0.1.<run number>` and attaches the debug APK, with notes
+  auto-generated from commits since the last tag via
+  `softprops/action-gh-release`.
 
 It uses `gradle/actions/setup-gradle` and `android-actions/setup-android`
 so no Gradle wrapper needs to be committed — the workflow provisions its
-own Gradle + Android SDK. To cut a release:
-
-```
-git tag v0.1.0
-git push origin v0.1.0
-```
+own Gradle + Android SDK. Every merge to `main` now shows up as a new
+release on the repo's Releases page within a couple minutes.
 
 Note it currently builds and ships the **debug**-signed APK, since that's
 zero-config (AGP auto-generates a debug keystore) and fine for sideloading

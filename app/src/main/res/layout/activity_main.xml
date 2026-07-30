@@ -11,6 +11,14 @@
         android:textSize="14sp"
         android:text="Pick an app to clone. This rewrites its package name and re-signs it with a new key, so it installs alongside the original."/>
 
+    <Button
+        android:id="@+id/viewLogsButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="8dp"
+        android:text="View Logs"/>
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/appListRecycler"
         android:layout_width="match_parent"

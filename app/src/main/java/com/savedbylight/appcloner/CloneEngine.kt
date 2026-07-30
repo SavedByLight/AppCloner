@@ -50,16 +50,20 @@ class CloneEngine(private val context: Context) {
 
     fun cloneApp(app: InstalledApp): File {
         val newPackageName = "${app.packageName}.clone1"
+        Logger.log("Starting clone of ${app.packageName} -> $newPackageName")
 
         val sourceApk = File(app.sourceApkPath)
         val workingCopy = File(workDir, "${app.packageName}_work.apk")
         sourceApk.copyTo(workingCopy, overwrite = true)
+        Logger.log("Copied source APK (${sourceApk.length()} bytes)")
 
         val rewrittenApk = File(workDir, "${app.packageName}_rewritten.apk")
         rewriteManifest(workingCopy, rewrittenApk, app.packageName, newPackageName)
+        Logger.log("Rewrote AndroidManifest.xml package/authorities")
 
         val signedApk = File(workDir, "${newPackageName}_signed.apk")
         signApk(rewrittenApk, signedApk)
+        Logger.log("Re-signed APK with generated key -> ${signedApk.name}")
 
         return signedApk
     }
@@ -173,6 +177,7 @@ class CloneEngine(private val context: Context) {
     }
 
     fun launchInstall(apkFile: File) {
+        Logger.log("Launching installer for ${apkFile.name}")
         val uri: Uri = FileProvider.getUriForFile(
             context, "${context.packageName}.fileprovider", apkFile
         )

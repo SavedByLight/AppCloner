@@ -1,9 +1,11 @@
 package com.savedbylight.appcloner
 
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.View
+import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -21,15 +23,21 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        Logger.init(applicationContext)
 
         val recycler = findViewById<RecyclerView>(R.id.appListRecycler)
         progressBar = findViewById(R.id.progressBar)
         recycler.layoutManager = LinearLayoutManager(this)
 
+        findViewById<Button>(R.id.viewLogsButton).setOnClickListener {
+            startActivity(Intent(this, LogActivity::class.java))
+        }
+
         CoroutineScope(Dispatchers.Main).launch {
             progressBar.visibility = View.VISIBLE
             val apps = withContext(Dispatchers.IO) { loadUserApps() }
             progressBar.visibility = View.GONE
+            Logger.log("Loaded ${apps.size} installed apps")
             recycler.adapter = AppListAdapter(apps) { app -> onAppSelected(app) }
         }
     }
@@ -65,6 +73,7 @@ class MainActivity : AppCompatActivity() {
                 CloneEngine(this@MainActivity).launchInstall(resultApk)
             } catch (e: Exception) {
                 progressBar.visibility = View.GONE
+                Logger.log("ERROR cloning ${app.packageName}: ${e.message}")
                 Toast.makeText(
                     this@MainActivity,
                     "Clone failed: ${e.message}",
