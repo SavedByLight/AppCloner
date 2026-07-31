@@ -207,6 +207,19 @@ class CloneEngine(private val context: Context) {
                 val superVisitor = super.child(ns, safeName)
                 return RewritingNodeVisitor(superVisitor, safeName, oldPkg, newPkg)
             }
+
+            // AxmlReader delivers namespace declarations (xmlns:android=...)
+            // straight to the root AxmlVisitor, bypassing child()/attr()
+            // entirely — a callback we had zero visibility into until now.
+            // AxmlWriter.ns() wraps `uri` into a StringItem with no null
+            // check, same class of bug as everything else here.
+            override fun ns(prefix: String?, uri: String?, ln: Int) {
+                val safeUri = uri ?: run {
+                    Logger.log("AXML: namespace declaration with null uri (prefix=$prefix) — substituting empty string")
+                    ""
+                }
+                super.ns(prefix, safeUri, ln)
+            }
         })
 
         Logger.log("AXML: serializing rewritten manifest")
@@ -303,6 +316,18 @@ class CloneEngine(private val context: Context) {
                 ""
             }
             return RewritingNodeVisitor(super.child(ns, safeName), safeName, oldPkg, newPkg)
+        }
+
+        // NodeImpl#text() does `this.text = new StringItem(value)` with no
+        // null check at all — a third callback (alongside attr()/child(),
+        // now both guarded) that we had never overridden, so a null text
+        // value would have passed straight through unguarded until now.
+        override fun text(lineNumber: Int, value: String?) {
+            val safeValue = value ?: run {
+                Logger.log("AXML: text node with null value under <$tag> at line $lineNumber — substituting empty string")
+                ""
+            }
+            super.text(lineNumber, safeValue)
         }
     }
 
