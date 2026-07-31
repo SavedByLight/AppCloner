@@ -261,9 +261,21 @@ class CloneEngine(private val context: Context) {
             // `value` (the ValueWrapper) is never null itself — only its
             // internal `raw` field is. Patch it in place before handing
             // off to the writer.
+            // `raw` turned out to be a `final` field (Kotlin surfaces it as
+            // `val`, confirmed by the "Val cannot be reassigned" compile
+            // error from direct assignment) — reflection works around that,
+            // since the JVM allows setting final *instance* fields
+            // reflectively at runtime; only compile-time constants are
+            // exempt, and this isn't one.
             if (newValue is ValueWrapper && newValue.raw == null) {
                 Logger.log("AXML: ValueWrapper with null raw text for attr '$name' on <$tag> (resourceId=0x${resourceId.toString(16)}, type=$type) — substituting empty string")
-                newValue.raw = ""
+                try {
+                    val rawField = ValueWrapper::class.java.getDeclaredField("raw")
+                    rawField.isAccessible = true
+                    rawField.set(newValue, "")
+                } catch (e: Exception) {
+                    Logger.log("AXML: reflection patch of ValueWrapper.raw failed: ${e.javaClass.simpleName}: ${e.message}")
+                }
             }
 
             // Defensive guards below: NodeImpl#attr() actually throws if
