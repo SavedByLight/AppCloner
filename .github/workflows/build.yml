@@ -36,6 +36,14 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/appcloner-release.jks"
 
+      - name: Verify decoded keystore
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          keytool -list -storepass "$KEYSTORE_PASSWORD" \
+            -keystore "$RUNNER_TEMP/appcloner-release.jks" \
+            || { echo "::error::KEYSTORE_BASE64 does not decode to a valid keystore (check for line-wrapping or double-encoding when the secret was generated)"; exit 1; }
+
       - name: Build release APK
         env:
           KEYSTORE_FILE: ${{ runner.temp }}/appcloner-release.jks
