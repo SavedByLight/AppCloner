@@ -199,8 +199,12 @@ class CloneEngine(private val context: Context) {
         Logger.log("AXML: walking nodes to rewrite package/authorities")
         reader.accept(object : AxmlVisitor(writer) {
             override fun child(ns: String?, name: String?): NodeVisitor {
-                val superVisitor = super.child(ns, name)
-                return RewritingNodeVisitor(superVisitor, name, oldPkg, newPkg)
+                val safeName = name ?: run {
+                    Logger.log("AXML: root child element with null tag name — substituting empty string")
+                    ""
+                }
+                val superVisitor = super.child(ns, safeName)
+                return RewritingNodeVisitor(superVisitor, safeName, oldPkg, newPkg)
             }
         })
 
@@ -264,7 +268,11 @@ class CloneEngine(private val context: Context) {
         }
 
         override fun child(ns: String?, name: String?): NodeVisitor {
-            return RewritingNodeVisitor(super.child(ns, name), name, oldPkg, newPkg)
+            val safeName = name ?: run {
+                Logger.log("AXML: child element with null tag name under <$tag> — substituting empty string")
+                ""
+            }
+            return RewritingNodeVisitor(super.child(ns, safeName), safeName, oldPkg, newPkg)
         }
     }
 
