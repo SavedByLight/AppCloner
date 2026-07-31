@@ -152,8 +152,6 @@ class CloneEngine(private val context: Context) {
      *  component class name (or, for <application>, the Application subclass)
      *  rather than an arbitrary key — the only tags where rewriting "name"
      *  is actually correct. */
-    private val COMPONENT_TAGS = setOf("application", "activity", "activity-alias", "service", "receiver", "provider")
-
     private fun rewritePackageInAxml(manifestBytes: ByteArray, oldPkg: String, newPkg: String): ByteArray {
         Logger.log("AXML: parsing manifest (${manifestBytes.size} bytes)")
         val reader = AxmlReader(manifestBytes)
@@ -294,5 +292,13 @@ class CloneEngine(private val context: Context) {
         } finally {
             session?.close()
         }
+    }
+
+    companion object {
+        /** Element tags whose "android:name" attribute is a fully-qualified
+         *  component class name (or, for <application>, the Application
+         *  subclass) rather than an arbitrary key — the only tags where
+         *  rewriting "name" is actually correct. */
+        private val COMPONENT_TAGS = setOf("application", "activity", "activity-alias", "service", "receiver", "provider")
     }
 }
