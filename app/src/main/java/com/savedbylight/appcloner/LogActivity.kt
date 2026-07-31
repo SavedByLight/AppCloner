@@ -1,23 +1,43 @@
 package com.savedbylight.appcloner
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.os.Build
 import android.os.Bundle
-import android.widget.TextView
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.ListView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 
 class LogActivity : AppCompatActivity() {
 
-    private lateinit var tvLog: TextView
+    private lateinit var logListView: ListView
+    private lateinit var logAdapter: ArrayAdapter<String>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_log)
 
-        tvLog = findViewById(R.id.tvLog)
+        logListView = findViewById(R.id.logListView)
+        logAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, mutableListOf())
+        logListView.adapter = logAdapter
 
-        // Populate terminal view with accumulated execution logs
+        findViewById<Button>(R.id.copyLogButton).setOnClickListener {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("Clone Log", Logger.all().joinToString("\n")))
+            Toast.makeText(this, "Log copied to clipboard", Toast.LENGTH_SHORT).show()
+        }
+
+        findViewById<Button>(R.id.clearLogButton).setOnClickListener {
+            Logger.clear()
+            updateLogDisplay()
+        }
+
+        // Populate list view with accumulated execution logs
         updateLogDisplay()
 
         // Handle intent if activity was launched directly by installation callback
@@ -97,8 +117,10 @@ class LogActivity : AppCompatActivity() {
     }
 
     private fun updateLogDisplay() {
-        if (::tvLog.isInitialized) {
-            tvLog.text = Logger.getLogs()
+        if (::logAdapter.isInitialized) {
+            logAdapter.clear()
+            logAdapter.addAll(Logger.all())
+            logAdapter.notifyDataSetChanged()
         }
     }
 }
