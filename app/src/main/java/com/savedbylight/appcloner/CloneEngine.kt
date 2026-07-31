@@ -56,23 +56,11 @@ class CloneEngine(private val context: Context) {
 
         val oldPackageName = appInfo.packageName
 
-        // Clones should never look byte-identical to the original app in
-        // the launcher: it's confusing for the user (which one is which?)
-        // and it's exactly the fingerprint some installer/scanner
-        // heuristics use to flag an app impersonating a known package.
-        // Give the clone a distinct label and a badge on its icon.
-        val originalLabel = try {
-            context.packageManager.getApplicationLabel(appInfo).toString()
-        } catch (e: Exception) {
-            oldPackageName
-        }
-        val cloneLabel = "$originalLabel Clone"
-
         // 1. Process Base APK
         val baseSourceFile = File(appInfo.sourceDir)
         val baseTargetFile = File(workDir, "base_signed.apk")
         Logger.log("Processing Base APK: ${baseSourceFile.name}")
-        processSingleApk(baseSourceFile, baseTargetFile, oldPackageName, targetPackageName, cloneLabel, badgeIcon = true)
+        processSingleApk(baseSourceFile, baseTargetFile, oldPackageName, targetPackageName, badgeIcon = true)
         clonedApkFiles.add(baseTargetFile)
 
         // 2. Process Split APKs (if present)
@@ -85,7 +73,7 @@ class CloneEngine(private val context: Context) {
                 Logger.log("Processing Split APK [$index]: ${splitSourceFile.name}")
                 // Launcher icon assets live in the base APK; splits don't
                 // need (and shouldn't get) their own badge pass.
-                processSingleApk(splitSourceFile, splitTargetFile, oldPackageName, targetPackageName, cloneLabel, badgeIcon = false)
+                processSingleApk(splitSourceFile, splitTargetFile, oldPackageName, targetPackageName, badgeIcon = false)
                 clonedApkFiles.add(splitTargetFile)
             }
         }
@@ -125,7 +113,6 @@ class CloneEngine(private val context: Context) {
         destination: File,
         oldPackageName: String,
         newPackageName: String,
-        cloneLabel: String,
         badgeIcon: Boolean
     ) {
         val tempUnsigned = File.createTempFile("temp_unsigned", ".apk", context.cacheDir)
@@ -135,7 +122,7 @@ class CloneEngine(private val context: Context) {
 
             // Rewrite binary AXML manifest parameters and (for the base
             // APK) badge the launcher icon, in place inside the zip
-            rewriteApkContents(tempUnsigned, oldPackageName, newPackageName, cloneLabel, badgeIcon)
+            rewriteApkContents(tempUnsigned, oldPackageName, newPackageName, badgeIcon)
 
             // Re-sign modified APK binary and output to destination. Every
             // APK in a clone (base + splits) must be signed with the SAME
@@ -167,7 +154,6 @@ class CloneEngine(private val context: Context) {
         apkFile: File,
         oldPackageName: String,
         newPackageName: String,
-        cloneLabel: String,
         badgeIcon: Boolean
     ) {
         val rewrittenApk = File.createTempFile("apk_rewrite", ".apk", context.cacheDir)
@@ -180,7 +166,7 @@ class CloneEngine(private val context: Context) {
                         val bytes = zipIn.getInputStream(entry).use { it.readBytes() }
                         val outBytes = when {
                             entry.name == "AndroidManifest.xml" ->
-                                rewritePackageInAxml(bytes, oldPackageName, newPackageName, cloneLabel)
+                                rewritePackageInAxml(bytes, oldPackageName, newPackageName)
                             badgeIcon && isLauncherIconEntry(entry.name) ->
                                 badgeLauncherIcon(entry.name, bytes)
                             else -> bytes
@@ -294,7 +280,7 @@ class CloneEngine(private val context: Context) {
      *  component class name (or, for <application>, the Application subclass)
      *  rather than an arbitrary key — the only tags where rewriting "name"
      *  is actually correct. */
-    private fun rewritePackageInAxml(manifestBytes: ByteArray, oldPkg: String, newPkg: String, cloneLabel: String): ByteArray {
+    private fun rewritePackageInAxml(manifestBytes: ByteArray, oldPkg: String, newPkg: String): ByteArray {
         Logger.log("AXML: parsing manifest (${manifestBytes.size} bytes)")
         val reader = AxmlReader(manifestBytes)
         val writer = AxmlWriter()
@@ -307,7 +293,7 @@ class CloneEngine(private val context: Context) {
                     ""
                 }
                 val superVisitor = super.child(ns, safeName)
-                return RewritingNodeVisitor(superVisitor, safeName, oldPkg, newPkg, cloneLabel)
+                return RewritingNodeVisitor(superVisitor, safeName, oldPkg, newPkg)
             }
 
             // AxmlReader delivers namespace declarations (xmlns:android=...)
@@ -342,24 +328,10 @@ class CloneEngine(private val context: Context) {
         parent: NodeVisitor,
         private val tag: String?,
         private val oldPkg: String,
-        private val newPkg: String,
-        private val cloneLabel: String
+        private val newPkg: String
     ) : NodeVisitor(parent) {
 
         override fun attr(ns: String?, name: String?, resourceId: Int, type: Int, value: Any?) {
-            // Force the app's display label to a distinct literal string.
-            // android:label on <application> is almost always a
-            // TYPE_REFERENCE pointing into resources.arsc (@string/app_name),
-            // so this intentionally bypasses the normal type/value handling
-            // below and emits a literal TYPE_STRING value instead — the
-            // only way to make the clone's name actually differ without
-            // touching resources.arsc directly.
-            if (tag == "application" && name == "label") {
-                Logger.log("AXML: overriding application label with distinct clone label")
-                super.attr(ns, name, 0, AxmlVisitor.TYPE_STRING, cloneLabel)
-                return
-            }
-
             var newValue = value
             if (value is String) {
                 newValue = when {
@@ -448,7 +420,7 @@ class CloneEngine(private val context: Context) {
                 Logger.log("AXML: child element with null tag name under <$tag> — substituting empty string")
                 ""
             }
-            return RewritingNodeVisitor(super.child(ns, safeName), safeName, oldPkg, newPkg, cloneLabel)
+            return RewritingNodeVisitor(super.child(ns, safeName), safeName, oldPkg, newPkg)
         }
 
         // NodeImpl#text() does `this.text = new StringItem(value)` with no
