@@ -13,10 +13,12 @@ import pxb.android.axml.AxmlWriter
 import pxb.android.axml.NodeVisitor
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.IOException
-import java.net.URI
-import java.nio.file.FileSystems
-import java.nio.file.Files
+import java.util.zip.CRC32
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 class CloneEngine(private val context: Context) {
 
@@ -123,14 +125,51 @@ class CloneEngine(private val context: Context) {
 
     /** Replaces the AndroidManifest.xml entry inside apkFile's zip with a
      *  package-rewritten version, leaving every other entry (resources.arsc,
-     *  classes.dex, native libs, etc.) byte-for-byte untouched. */
+     *  classes.dex, native libs, etc.) byte-for-byte untouched.
+     *
+     *  Note: java.nio.file's "jar:" FileSystemProvider (used in an earlier
+     *  version of this method) is a desktop-JDK-only feature — it compiles
+     *  fine against the Android SDK stubs but throws
+     *  ProviderNotFoundException at runtime, since Android doesn't ship
+     *  ZipFileSystemProvider. java.util.zip, used here instead, is fully
+     *  supported on-device. */
     private fun rewriteAxmlManifest(apkFile: File, oldPackageName: String, newPackageName: String) {
-        val zipUri = URI.create("jar:" + apkFile.toURI())
-        FileSystems.newFileSystem(zipUri, mapOf("create" to "false")).use { zipFs ->
-            val manifestPath = zipFs.getPath("AndroidManifest.xml")
-            val originalBytes = Files.readAllBytes(manifestPath)
-            val rewritten = rewritePackageInAxml(originalBytes, oldPackageName, newPackageName)
-            Files.write(manifestPath, rewritten)
+        val rewrittenApk = File.createTempFile("manifest_rewrite", ".apk", context.cacheDir)
+        try {
+            ZipFile(apkFile).use { zipIn ->
+                ZipOutputStream(FileOutputStream(rewrittenApk)).use { zipOut ->
+                    val entries = zipIn.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        val bytes = zipIn.getInputStream(entry).use { it.readBytes() }
+                        val outBytes = if (entry.name == "AndroidManifest.xml") {
+                            rewritePackageInAxml(bytes, oldPackageName, newPackageName)
+                        } else {
+                            bytes
+                        }
+
+                        val outEntry = ZipEntry(entry.name)
+                        if (entry.method == ZipEntry.STORED) {
+                            // STORED entries require exact size/CRC to be
+                            // declared up front; DEFLATED entries let
+                            // ZipOutputStream compute these on the fly.
+                            outEntry.method = ZipEntry.STORED
+                            outEntry.size = outBytes.size.toLong()
+                            outEntry.compressedSize = outBytes.size.toLong()
+                            outEntry.crc = CRC32().apply { update(outBytes) }.value
+                        } else {
+                            outEntry.method = ZipEntry.DEFLATED
+                        }
+
+                        zipOut.putNextEntry(outEntry)
+                        zipOut.write(outBytes)
+                        zipOut.closeEntry()
+                    }
+                }
+            }
+            rewrittenApk.copyTo(apkFile, overwrite = true)
+        } finally {
+            rewrittenApk.delete()
         }
     }
 
