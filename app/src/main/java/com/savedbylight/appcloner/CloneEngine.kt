@@ -86,10 +86,8 @@ class CloneEngine(private val context: Context) {
 
     /**
      * Entry point called by MainActivity passing a List<File> of APKs.
-     * Routes through the user's configured third-party installer if one is
-     * set and the APK set is eligible (see [installViaThirdPartyInstaller]);
-     * otherwise falls back to the system installer via a PackageInstaller
-     * session.
+     * Installs directly via [RootInstaller] — see the overload below for
+     * why there's no PackageInstaller/third-party fallback.
      */
     fun launchInstall(apkFiles: List<File>) {
         launchInstall(null, apkFiles)
@@ -98,40 +96,29 @@ class CloneEngine(private val context: Context) {
     /**
      * Overload accepting target package name explicitly.
      *
-     * Tries a silent root install first (no PackageInstaller UI at all —
-     * this app *is* the installer for its own clones). Only falls back to
-     * the system installer / third-party installer handoff below if root
-     * isn't available or the root install itself fails, so this still
-     * works on unrooted devices.
+     * This app is its own installer for its clones: it always installs via
+     * root ([RootInstaller]) and never hands the APK to the system
+     * PackageInstaller UI or a third-party installer app. There is
+     * deliberately no fallback to [installPackageSession] or
+     * [installViaThirdPartyInstaller] here — either of those would defeat
+     * the point by popping an install confirmation screen. Both methods are
+     * kept below only in case a caller wants to invoke them explicitly
+     * (e.g. a future "share APK" action that's supposed to prompt).
+     *
+     * @throws IllegalStateException if the device isn't rooted / root
+     *   access wasn't granted to this app.
      */
     fun launchInstall(targetPackageName: String?, apkFiles: List<File>) {
-        if (RootInstaller.isRootAvailable()) {
-            try {
-                Logger.log("Root available — installing ${apkFiles.size} APK(s) via root shell, skipping installer UI")
-                RootInstaller.installApksAsRoot(targetPackageName, apkFiles)
-                return
-            } catch (e: Exception) {
-                Logger.log("Root install failed (${e.javaClass.simpleName}: ${e.message}); falling back to system installer")
-            }
-        } else {
-            Logger.log("Root not available; using system installer")
+        if (!RootInstaller.isRootAvailable()) {
+            Logger.log("Root not available — cannot install without the system installer UI")
+            throw IllegalStateException(
+                "Root access is required to install clones. This app installs directly " +
+                    "as its own installer and does not fall back to the system Package " +
+                    "Installer; grant root (su) access and try again."
+            )
         }
-
-        val installerPackage = Companion.getPreferredInstallerPackage(context)
-        if (installerPackage != null && apkFiles.size == 1) {
-            Logger.log("Routing install through third-party installer: $installerPackage")
-            installViaThirdPartyInstaller(context, apkFiles[0], installerPackage)
-        } else {
-            if (installerPackage != null && apkFiles.size > 1) {
-                Logger.log(
-                    "Third-party installer configured ($installerPackage) but this clone has " +
-                        "${apkFiles.size} APKs (base + splits); the ACTION_VIEW single-file " +
-                        "handoff can't install a split set atomically, so falling back to the " +
-                        "system PackageInstaller session instead."
-                )
-            }
-            installPackageSession(context, targetPackageName, apkFiles)
-        }
+        Logger.log("Installing ${apkFiles.size} APK(s) via root shell")
+        RootInstaller.installApksAsRoot(targetPackageName, apkFiles)
     }
 
     /**
