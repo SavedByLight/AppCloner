@@ -42,11 +42,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Google apps are signature-tied to Play Services / Play Integrity and
+    // gain nothing from cloning — they either crash on launch or get flagged
+    // once the package name/signing cert changes. Exclude by prefix rather
+    // than relying solely on FLAG_SYSTEM, since some OEMs ship these as
+    // regular updatable packages.
+    private val excludedPackagePrefixes = listOf(
+        "com.google.",       // covers com.google.android.gms, GSF, YouTube, Gmail, Maps, etc.
+        "com.android.vending", // Play Store
+        "com.android.chrome"   // Chrome ships under com.android.*, not com.google.*
+    )
+
+    private fun isExcludedFromCloning(packageName: String): Boolean =
+        excludedPackagePrefixes.any { packageName.startsWith(it) }
+
     private fun loadUserApps(): List<InstalledApp> {
         val pm = packageManager
         return pm.getInstalledApplications(PackageManager.GET_META_DATA)
             .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 } // skip system apps
             .filter { it.packageName != packageName } // don't offer to clone ourselves
+            .filter { !isExcludedFromCloning(it.packageName) } // skip Google apps
             .mapNotNull { ai ->
                 try {
                     InstalledApp(

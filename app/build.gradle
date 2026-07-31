@@ -15,9 +15,31 @@ android {
         versionName "0.1"
     }
 
+    // Release signing is populated from environment variables in CI
+    // (see .github/workflows/build.yml), which decodes the KEYSTORE_BASE64
+    // secret to a file and exports the passwords/alias as env vars.
+    // Locally, set these in your shell or a gradle.properties that is
+    // gitignored if you want to build a signed release APK yourself.
+    def keystorePath = System.getenv("KEYSTORE_FILE")
+    def hasReleaseSigning = keystorePath != null && file(keystorePath).exists()
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile file(keystorePath)
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS")
+                keyPassword System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
