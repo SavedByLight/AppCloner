@@ -54,7 +54,14 @@ dependencies {
     implementation 'org.bouncycastle:bcprov-jdk15on:1.70'
     implementation 'org.bouncycastle:bcpkix-jdk15on:1.70'
 
-    // Local library jars/aars (Place your pxb/AXML parser jar files inside app/libs/)
+    // APK re-signing (com.android.apksig.ApkSigner) — published by Google,
+    // version pinned to match the AGP version above.
+    implementation 'com.android.tools.build:apksig:8.4.1'
+
+    // Binary AndroidManifest.xml (AXML) reader/writer (pxb.android.axml.*)
+    implementation 'de.upb.cs.swt:axml:2.1.3'
+
+    // Any other local library jars/aars placed in app/libs/, if present.
     implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
 
     testImplementation 'junit:junit:4.13.2'
