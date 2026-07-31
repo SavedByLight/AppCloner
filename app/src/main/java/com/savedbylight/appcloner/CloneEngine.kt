@@ -6,9 +6,17 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInstaller
 import android.os.Build
+import com.android.apksig.ApkSigner
+import pxb.android.axml.AxmlReader
+import pxb.android.axml.AxmlVisitor
+import pxb.android.axml.AxmlWriter
+import pxb.android.axml.NodeVisitor
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.net.URI
+import java.nio.file.FileSystems
+import java.nio.file.Files
 
 class CloneEngine(private val context: Context) {
 
@@ -37,11 +45,13 @@ class CloneEngine(private val context: Context) {
         val workDir = File(context.cacheDir, "clone_work_$targetPackageName").apply { mkdirs() }
         val clonedApkFiles = mutableListOf<File>()
 
+        val oldPackageName = appInfo.packageName
+
         // 1. Process Base APK
         val baseSourceFile = File(appInfo.sourceDir)
         val baseTargetFile = File(workDir, "base_signed.apk")
         Logger.log("Processing Base APK: ${baseSourceFile.name}")
-        processSingleApk(baseSourceFile, baseTargetFile, targetPackageName)
+        processSingleApk(baseSourceFile, baseTargetFile, oldPackageName, targetPackageName)
         clonedApkFiles.add(baseTargetFile)
 
         // 2. Process Split APKs (if present)
@@ -52,7 +62,7 @@ class CloneEngine(private val context: Context) {
                 val splitSourceFile = File(splitPath)
                 val splitTargetFile = File(workDir, "split_${index}_signed.apk")
                 Logger.log("Processing Split APK [$index]: ${splitSourceFile.name}")
-                processSingleApk(splitSourceFile, splitTargetFile, targetPackageName)
+                processSingleApk(splitSourceFile, splitTargetFile, oldPackageName, targetPackageName)
                 clonedApkFiles.add(splitTargetFile)
             }
         }
@@ -86,16 +96,18 @@ class CloneEngine(private val context: Context) {
      * Handles binary XML rewriting and signing for an individual APK file.
      * Guarantees the destination file exists on disk to prevent ENOENT errors during install.
      */
-    private fun processSingleApk(source: File, destination: File, newPackageName: String) {
+    private fun processSingleApk(source: File, destination: File, oldPackageName: String, newPackageName: String) {
         val tempUnsigned = File.createTempFile("temp_unsigned", ".apk", context.cacheDir)
         try {
             // Copy source APK to temporary buffer
             source.copyTo(tempUnsigned, overwrite = true)
 
-            // Rewrite binary AXML manifest parameters
-            rewriteAxmlManifest(tempUnsigned, newPackageName)
+            // Rewrite binary AXML manifest parameters, in place inside the zip
+            rewriteAxmlManifest(tempUnsigned, oldPackageName, newPackageName)
 
-            // Re-sign modified APK binary and output to destination
+            // Re-sign modified APK binary and output to destination. Every
+            // APK in a clone (base + splits) must be signed with the SAME
+            // key or the install session will be rejected as inconsistent.
             signApkBinary(tempUnsigned, destination)
 
             // Sanity validation to guarantee destination file existence
@@ -109,13 +121,114 @@ class CloneEngine(private val context: Context) {
         }
     }
 
-    private fun rewriteAxmlManifest(apkFile: File, newPackageName: String) {
-        // AXML string pool traversing and authority modification logic
+    /** Replaces the AndroidManifest.xml entry inside apkFile's zip with a
+     *  package-rewritten version, leaving every other entry (resources.arsc,
+     *  classes.dex, native libs, etc.) byte-for-byte untouched. */
+    private fun rewriteAxmlManifest(apkFile: File, oldPackageName: String, newPackageName: String) {
+        val zipUri = URI.create("jar:" + apkFile.toURI())
+        FileSystems.newFileSystem(zipUri, mapOf("create" to "false")).use { zipFs ->
+            val manifestPath = zipFs.getPath("AndroidManifest.xml")
+            val originalBytes = Files.readAllBytes(manifestPath)
+            val rewritten = rewritePackageInAxml(originalBytes, oldPackageName, newPackageName)
+            Files.write(manifestPath, rewritten)
+        }
     }
 
     private fun signApkBinary(inputFile: File, outputFile: File) {
-        // Ensures the processed payload is written to 'outputFile' destination
-        inputFile.copyTo(outputFile, overwrite = true)
+        val (privateKey, certChain) = SigningIdentity.getOrCreate(context)
+        val signerConfig = ApkSigner.SignerConfig.Builder("CloneKey", privateKey, certChain).build()
+        ApkSigner.Builder(listOf(signerConfig))
+            .setInputApk(inputFile)
+            .setOutputApk(outputFile)
+            .setV1SigningEnabled(true)
+            .setV2SigningEnabled(true)
+            .setV3SigningEnabled(true)
+            .setMinSdkVersion(26)
+            .build()
+            .sign()
+    }
+
+    /** Element tags whose "android:name" attribute is a fully-qualified
+     *  component class name (or, for <application>, the Application subclass)
+     *  rather than an arbitrary key — the only tags where rewriting "name"
+     *  is actually correct. */
+    private val COMPONENT_TAGS = setOf("application", "activity", "activity-alias", "service", "receiver", "provider")
+
+    private fun rewritePackageInAxml(manifestBytes: ByteArray, oldPkg: String, newPkg: String): ByteArray {
+        Logger.log("AXML: parsing manifest (${manifestBytes.size} bytes)")
+        val reader = AxmlReader(manifestBytes)
+        val writer = AxmlWriter()
+
+        Logger.log("AXML: walking nodes to rewrite package/authorities")
+        reader.accept(object : AxmlVisitor(writer) {
+            override fun child(ns: String?, name: String?): NodeVisitor {
+                val superVisitor = super.child(ns, name)
+                return RewritingNodeVisitor(superVisitor, name, oldPkg, newPkg)
+            }
+        })
+
+        Logger.log("AXML: serializing rewritten manifest")
+        return writer.toByteArray()
+    }
+
+    /** Recursively walks manifest nodes, tracking each element's tag name so
+     *  attribute rewrites can be scoped to where a package-name substitution
+     *  is actually correct:
+     *   - <manifest package="...">                        — exact match
+     *   - <provider android:authorities="...">             — substring (can be a comma list)
+     *   - <application/activity/activity-alias/service/receiver/provider
+     *     android:name="...">                              — prefix match (FQCN)
+     *   - android:process="..." on any component            — prefix match
+     *  Everything else (meta-data keys/values, intent-filter data, etc.) is
+     *  left untouched, even if it happens to contain the package substring. */
+    private class RewritingNodeVisitor(
+        parent: NodeVisitor,
+        private val tag: String?,
+        private val oldPkg: String,
+        private val newPkg: String
+    ) : NodeVisitor(parent) {
+
+        override fun attr(ns: String?, name: String?, resourceId: Int, type: Int, value: Any?) {
+            var newValue = value
+            if (value is String) {
+                newValue = when {
+                    tag == "manifest" && name == "package" && value == oldPkg ->
+                        newPkg
+                    tag == "provider" && name == "authorities" && value.contains(oldPkg) ->
+                        value.replace(oldPkg, newPkg)
+                    tag in COMPONENT_TAGS && name == "name" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+                    tag in COMPONENT_TAGS && name == "process" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+                    else -> value
+                }
+            }
+
+            // AxmlWriter unconditionally wraps `name`, and `value` when
+            // type == TYPE_STRING, into a StringItem with no null check.
+            // Some attributes in manifests built by newer aapt2 resolve to
+            // null here even though the reader still reports TYPE_STRING;
+            // left as null they get silently added to the writer's string
+            // pool and blow up much later in StringItems.prepare() with an
+            // unhelpful NPE. Substitute empty strings instead so the entry
+            // is at least well-formed; this only affects attributes whose
+            // value the reader couldn't resolve in the first place.
+            val safeName = name ?: run {
+                Logger.log("AXML: attribute with null name at resourceId=0x${resourceId.toString(16)} (type=$type) — substituting empty string")
+                ""
+            }
+            var safeValue = newValue
+            if (type == AxmlVisitor.TYPE_STRING && safeValue == null) {
+                Logger.log("AXML: null string value for attr '$safeName' on <$tag> (resourceId=0x${resourceId.toString(16)}) — substituting empty string")
+                safeValue = ""
+            }
+
+            super.attr(ns, safeName, resourceId, type, safeValue)
+        }
+
+        override fun child(ns: String?, name: String?): NodeVisitor {
+            return RewritingNodeVisitor(super.child(ns, name), name, oldPkg, newPkg)
+        }
     }
 
     /**
