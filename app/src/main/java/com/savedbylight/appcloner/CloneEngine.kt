@@ -255,6 +255,23 @@ class CloneEngine(private val context: Context) {
                         newPkg + value.removePrefix(oldPkg)
                     tag in COMPONENT_TAGS && name == "process" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
+                    // Custom permission declarations. Permission names are
+                    // unique per-device, not per-package, so leaving these
+                    // unchanged collides with the already-installed
+                    // original app (INSTALL_FAILED_DUPLICATE_PERMISSION).
+                    tag in PERMISSION_DECLARATION_TAGS && name == "name" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+                    // Self-references to one of the app's own custom
+                    // permissions (as opposed to a system permission, which
+                    // never starts with the app's package name).
+                    tag == "uses-permission" && name == "name" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+                    // android:permission / readPermission / writePermission
+                    // on <provider>/<service>/<activity>/<receiver>/
+                    // <application> gate access using a permission name —
+                    // must follow the declaration's rename.
+                    name in PERMISSION_REFERENCE_ATTRS && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
                     else -> value
                 }
             }
@@ -402,5 +419,12 @@ class CloneEngine(private val context: Context) {
          *  subclass) rather than an arbitrary key — the only tags where
          *  rewriting "name" is actually correct. */
         private val COMPONENT_TAGS = setOf("application", "activity", "activity-alias", "service", "receiver", "provider")
+
+        /** Elements that declare a custom permission by name. */
+        private val PERMISSION_DECLARATION_TAGS = setOf("permission", "permission-group", "permission-tree")
+
+        /** Attributes that reference a (possibly custom) permission name to
+         *  gate access to a component. */
+        private val PERMISSION_REFERENCE_ATTRS = setOf("permission", "readPermission", "writePermission")
     }
 }
