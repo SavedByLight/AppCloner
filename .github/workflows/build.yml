@@ -31,14 +31,28 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+      - name: Decode release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/appcloner-release.jks"
+
+      - name: Build release APK
+        env:
+          KEYSTORE_FILE: ${{ runner.temp }}/appcloner-release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon
+
+      - name: Remove keystore from runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/appcloner-release.jks"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AppCloner-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: AppCloner-release-apk
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
   release:
@@ -51,7 +65,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
-          name: AppCloner-debug-apk
+          name: AppCloner-release-apk
           path: dist
 
       - name: Generate release tag
