@@ -22,7 +22,7 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
-            - name: Decode Keystore
+      - name: Decode Keystore
         env:
           SIGNING_KEY_STORE_BASE64: ${{ secrets.SIGNING_KEY_STORE_BASE64 }}
         run: |
@@ -54,3 +54,4 @@ jobs:
         with:
           name: AppCloner-release-apk
           path: AppCloner-Staging/app/build/outputs/apk/release/app-release.apk
+          
