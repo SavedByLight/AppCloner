@@ -11,6 +11,7 @@ import pxb.android.axml.AxmlReader
 import pxb.android.axml.AxmlVisitor
 import pxb.android.axml.AxmlWriter
 import pxb.android.axml.NodeVisitor
+import pxb.android.axml.ValueWrapper
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -245,15 +246,32 @@ class CloneEngine(private val context: Context) {
                 }
             }
 
-            // AxmlWriter unconditionally wraps `name`, and `value` when
-            // type == TYPE_STRING, into a StringItem with no null check.
-            // Some attributes in manifests built by newer aapt2 resolve to
-            // null here even though the reader still reports TYPE_STRING;
-            // left as null they get silently added to the writer's string
-            // pool and blow up much later in StringItems.prepare() with an
-            // unhelpful NPE. Substitute empty strings instead so the entry
-            // is at least well-formed; this only affects attributes whose
-            // value the reader couldn't resolve in the first place.
+            // The actual bug, found by reading pxb.android.axml's source:
+            // NodeImpl#attr() unconditionally does
+            //   a.raw = new StringItem(valueWrapper.raw)
+            // for any attribute value wrapped in a ValueWrapper (used for
+            // resource references — very common for icon/theme/label/etc.
+            // attributes in manifests built by modern aapt2, which often
+            // leaves `raw` null and only populates the resolved `ref` int).
+            // That produces a StringItem whose *contents* are null, but the
+            // StringItem object itself isn't — so Attr.prepare()'s
+            // `if (raw != null)` check lets it straight through, and it
+            // later NPEs deep inside StringItems.prepare(). Nothing we do
+            // to the top-level `value` we're handed can see this, since
+            // `value` (the ValueWrapper) is never null itself — only its
+            // internal `raw` field is. Patch it in place before handing
+            // off to the writer.
+            if (newValue is ValueWrapper && newValue.raw == null) {
+                Logger.log("AXML: ValueWrapper with null raw text for attr '$name' on <$tag> (resourceId=0x${resourceId.toString(16)}, type=$type) — substituting empty string")
+                newValue.raw = ""
+            }
+
+            // Defensive guards below: NodeImpl#attr() actually throws if
+            // `name` is null (confirmed by reading its source), so the
+            // null-name branch is dead in practice — kept only in case a
+            // future library version changes that. The TYPE_STRING/null
+            // value branch is a real (if apparently rarer) NPE path in the
+            // same class as the ValueWrapper one above.
             val safeName = name ?: run {
                 Logger.log("AXML: attribute with null name at resourceId=0x${resourceId.toString(16)} (type=$type) — substituting empty string")
                 ""
