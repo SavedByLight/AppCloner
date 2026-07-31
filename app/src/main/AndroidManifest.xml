@@ -25,16 +25,11 @@
         <activity
             android:name=".LogActivity"
             android:exported="false" />
-
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="com.savedbylight.appcloner.fileprovider"
+        <activity
+            android:name=".installer.InstallerActivity"
             android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
-        </provider>
+            android:launchMode="singleTop" />
+
 
     </application>
 

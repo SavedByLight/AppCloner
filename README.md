@@ -22,12 +22,12 @@ is: **make a second app that Android thinks is a completely different app.**
    This is required — the original signature is invalid once the manifest
    bytes changed, and Android refuses to install anything unsigned or
    tampered.
-5. Hand the signed APK to the system installer via a `FileProvider` +
-   `ACTION_VIEW` intent, same as installing any APK.
+5. Stage the signed APKs into the app's own built-in installer screen,
+   which commits the install through Android's `PackageInstaller` API.
 
 Every step logs to an in-app **Log page** (`View Logs` button on the main
 screen → `LogActivity`) — a persistent, timestamped record of each clone
-attempt (copy → manifest rewrite → sign → install trigger, or the error if
+attempt (copy → manifest rewrite → sign → install staging, or the error if
 one of those steps fails), backed by `Logger.kt`, which keeps entries in
 memory and appends them to `filesDir/clone_log.txt` so history survives an
 app restart.

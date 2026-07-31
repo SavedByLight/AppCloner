@@ -10,10 +10,9 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.net.Uri
 import android.os.Build
-import androidx.core.content.FileProvider
 import com.android.apksig.ApkSigner
+import com.savedbylight.appcloner.installer.InstallSession
 import pxb.android.axml.AxmlReader
 import pxb.android.axml.AxmlVisitor
 import pxb.android.axml.AxmlWriter
@@ -85,11 +84,9 @@ class CloneEngine(private val context: Context) {
 
 
     /**
-     * Entry point called by MainActivity passing a List<File> of APKs.
-     * Routes through the user's configured third-party installer if one is
-     * set and the APK set is eligible (see [installViaThirdPartyInstaller]);
-     * otherwise falls back to the system installer via a PackageInstaller
-     * session.
+     * Entry point called by older code paths that still hand the clone files
+     * directly to CloneEngine. The actual install UI now lives inside the app
+     * itself in InstallerActivity.
      */
     fun launchInstall(apkFiles: List<File>) {
         launchInstall(null, apkFiles)
@@ -99,21 +96,13 @@ class CloneEngine(private val context: Context) {
      * Overload accepting target package name explicitly.
      */
     fun launchInstall(targetPackageName: String?, apkFiles: List<File>) {
-        val installerPackage = Companion.getPreferredInstallerPackage(context)
-        if (installerPackage != null && apkFiles.size == 1) {
-            Logger.log("Routing install through third-party installer: $installerPackage")
-            installViaThirdPartyInstaller(context, apkFiles[0], installerPackage)
-        } else {
-            if (installerPackage != null && apkFiles.size > 1) {
-                Logger.log(
-                    "Third-party installer configured ($installerPackage) but this clone has " +
-                        "${apkFiles.size} APKs (base + splits); the ACTION_VIEW single-file " +
-                        "handoff can't install a split set atomically, so falling back to the " +
-                        "system PackageInstaller session instead."
-                )
-            }
-            installPackageSession(context, targetPackageName, apkFiles)
-        }
+        Logger.log("Launching built-in installer for ${apkFiles.size} APK file(s)")
+        InstallSession(context).commitInstall(
+            appLabel = null,
+            originalPackage = null,
+            targetPackage = targetPackageName,
+            apkPaths = apkFiles.map { it.absolutePath }
+        )
     }
 
     /**
@@ -122,65 +111,6 @@ class CloneEngine(private val context: Context) {
     fun cloneAndInstallApp(appInfo: ApplicationInfo, targetPackageName: String) {
         val files = cloneApp(appInfo, targetPackageName)
         launchInstall(targetPackageName, files)
-    }
-
-    /**
-     * Hands a single APK off to a specific third-party installer app via
-     * ACTION_VIEW, instead of using the system's own PackageInstaller
-     * session flow. The target app is responsible for whatever install UI
-     * (or lack thereof) it presents — App Cloner has no visibility into or
-     * control over that once the intent is dispatched.
-     *
-     * Only works for a single, split-free APK: ACTION_VIEW's
-     * "application/vnd.android.package-archive" contract is a single file,
-     * so a base+splits set can't go through this path — see [launchInstall].
-     *
-     * @param installerPackageName package name of the installer app to
-     *   target directly (skips the chooser). Pass null to let the user pick
-     *   from a chooser of every app that can handle an APK-install intent.
-     */
-    fun installViaThirdPartyInstaller(
-        context: Context,
-        apkFile: File,
-        installerPackageName: String?
-    ) {
-        if (!apkFile.exists()) {
-            throw IOException("APK file does not exist: ${apkFile.absolutePath}")
-        }
-
-        val apkUri: Uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            apkFile
-        )
-
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(apkUri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (!installerPackageName.isNullOrEmpty()) {
-                setPackage(installerPackageName)
-            }
-        }
-
-        // If we targeted a specific package and it can't actually handle
-        // this intent (not installed, or doesn't register for it), fail
-        // loudly and let the caller decide whether to retry with the
-        // system installer rather than silently no-op.
-        if (!installerPackageName.isNullOrEmpty() &&
-            intent.resolveActivity(context.packageManager) == null
-        ) {
-            throw IllegalStateException(
-                "Configured installer package '$installerPackageName' has no activity " +
-                    "that handles ACTION_VIEW for an APK — is it installed?"
-            )
-        }
-
-        Logger.log(
-            "Dispatching ACTION_VIEW install intent for ${apkFile.name} " +
-                if (installerPackageName.isNullOrEmpty()) "(chooser)" else "(target: $installerPackageName)"
-        )
-        context.startActivity(intent)
     }
 
     /**
@@ -516,68 +446,16 @@ class CloneEngine(private val context: Context) {
     }
 
     /**
-     * Stages base and split APKs into a PackageInstaller.Session and commits them atomically.
+     * Legacy helper kept for compatibility with the old cloning flow.
+     * The actual install session is now driven by InstallerActivity.
      */
     private fun installPackageSession(context: Context, packageName: String?, apkFiles: List<File>) {
-        if (apkFiles.isEmpty()) {
-            throw IllegalArgumentException("No APK files provided for installation.")
-        }
-
-        val packageInstaller = context.packageManager.packageInstaller
-        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-        if (!packageName.isNullOrEmpty()) {
-            params.setAppPackageName(packageName)
-        }
-
-        val sessionId = packageInstaller.createSession(params)
-        var session: PackageInstaller.Session? = null
-
-        try {
-            session = packageInstaller.openSession(sessionId)
-
-            apkFiles.forEachIndexed { index, file ->
-                if (!file.exists()) {
-                    throw IOException("APK file does not exist: ${file.absolutePath}")
-                }
-
-                val sessionStreamName = if (index == 0) "base.apk" else "split_$index.apk"
-                val outStream = session.openWrite(sessionStreamName, 0, file.length())
-
-                FileInputStream(file).use { inStream ->
-                    inStream.copyTo(outStream)
-                }
-                session.fsync(outStream)
-                outStream.close()
-                Logger.log("Staged $sessionStreamName (${file.length()} bytes) into session $sessionId")
-            }
-
-            // Create IntentSender callback for installation status broadcast
-            val intent = Intent(context, LogActivity::class.java).apply {
-                action = "com.savedbylight.appcloner.INSTALL_COMPLETE"
-            }
-
-            val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-            } else {
-                PendingIntent.FLAG_UPDATE_CURRENT
-            }
-
-            val pendingIntent = PendingIntent.getActivity(
-                context,
-                sessionId,
-                intent,
-                pendingIntentFlags
-            )
-
-            session.commit(pendingIntent.intentSender)
-            Logger.log("Committed install session $sessionId")
-        } catch (e: Exception) {
-            session?.abandon()
-            Logger.log("Session $sessionId failed: ${e.message}")
-            throw e
-        } finally {
-            session?.close()
-        }
+        InstallSession(context).commitInstall(
+            appLabel = null,
+            originalPackage = null,
+            targetPackage = packageName,
+            apkPaths = apkFiles.map { it.absolutePath }
+        )
     }
 
     companion object {
@@ -594,32 +472,5 @@ class CloneEngine(private val context: Context) {
          *  gate access to a component. */
         private val PERMISSION_REFERENCE_ATTRS = setOf("permission", "readPermission", "writePermission")
 
-        private const val PREFS_NAME = "app_cloner_prefs"
-        private const val PREF_KEY_INSTALLER_PACKAGE = "preferred_installer_package"
-
-        /**
-         * Sets (or clears, by passing null/blank) the third-party installer
-         * package that [launchInstall] should route single-APK clones
-         * through. Intended to be called from a settings UI where the user
-         * picks an installed app (e.g. by package name or from a list of
-         * apps that resolve ACTION_VIEW for an APK mime type).
-         */
-        fun setPreferredInstallerPackage(context: Context, packageName: String?) {
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .apply {
-                    if (packageName.isNullOrBlank()) remove(PREF_KEY_INSTALLER_PACKAGE)
-                    else putString(PREF_KEY_INSTALLER_PACKAGE, packageName)
-                }
-                .apply()
-        }
-
-        /** Public read accessor, e.g. so a settings screen can show the
-         *  currently configured installer. */
-        fun getPreferredInstallerPackage(context: Context): String? {
-            val pkg = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(PREF_KEY_INSTALLER_PACKAGE, null)
-            return if (pkg.isNullOrBlank()) null else pkg
-        }
     }
 }

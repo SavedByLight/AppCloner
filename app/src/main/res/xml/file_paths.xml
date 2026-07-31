@@ -2,8 +2,7 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="cloned_apks" path="cloned_apks/" />
     <!-- CloneEngine writes each clone's APKs to cacheDir/clone_work_<pkg>/,
-         not cloned_apks/ — cover the whole cache dir so FileProvider can
-         grant a content:// URI for those files too (needed for the
-         ACTION_VIEW third-party-installer handoff). -->
+         not cloned_apks/ — this cache mapping is kept for any future sharing
+         or debugging flows that need access to staged clone APKs. -->
     <cache-path name="clone_work" path="." />
 </paths>

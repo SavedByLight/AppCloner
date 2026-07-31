@@ -11,6 +11,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.savedbylight.appcloner.installer.InstallerActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -88,7 +89,17 @@ class MainActivity : AppCompatActivity() {
                     CloneEngine(this@MainActivity).cloneApp(app)
                 }
                 progressBar.visibility = View.GONE
-                CloneEngine(this@MainActivity).launchInstall(resultApk)
+                val targetPackage = "${app.packageName}.clone1"
+                startActivity(
+                    InstallerActivity.createIntent(
+                        context = this@MainActivity,
+                        appLabel = app.label,
+                        originalPackage = app.packageName,
+                        targetPackage = targetPackage,
+                        apkPaths = resultApk.map { it.absolutePath },
+                        autoInstall = true
+                    )
+                )
             } catch (e: Exception) {
                 progressBar.visibility = View.GONE
                 Logger.log("ERROR cloning ${app.packageName}: ${e.message}\n${e.stackTraceToString()}")
