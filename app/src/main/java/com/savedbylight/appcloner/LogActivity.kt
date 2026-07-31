@@ -82,6 +82,11 @@ class LogActivity : AppCompatActivity() {
                     Logger.log("INSTALL FAILED (STATUS_FAILURE): $message")
                 }
 
+                PackageInstaller.STATUS_FAILURE_ABORTED -> {
+                    Logger.log("INSTALL ABORTED: $message")
+                    Logger.log("This is commonly an OEM package installer (Samsung Auto Blocker, Play Protect scan, Knox policy, etc.) silently rejecting a multi-split APK session from a non-Play-Store installer — not necessarily an actual user cancel. Check Settings > Security > Auto Blocker and Play Protect's \"scan before install\" toggle.")
+                }
+
                 PackageInstaller.STATUS_FAILURE_BLOCKED -> {
                     Logger.log("INSTALL BLOCKED: Installation blocked by device policy or user settings. $message")
                 }
