@@ -427,6 +427,22 @@ class CloneEngine(private val context: Context) {
                         newPkg + value.removePrefix(oldPkg)
                     tag in COMPONENT_TAGS && name == "process" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
+                    // <activity-alias android:targetActivity="..."> points at
+                    // the FQCN of the <activity> it aliases. It's a separate
+                    // attribute from "name" (the alias's own component name,
+                    // already handled above) and was previously left
+                    // untouched, so after rewriting, the alias still pointed
+                    // at the *old* package's activity — which no longer
+                    // exists post-rename, only the aliased-to name changed.
+                    // pm's parser cross-checks this against the parsed
+                    // <activity> list and rejects the whole manifest with
+                    // INSTALL_PARSE_FAILED_MANIFEST_MALFORMED when they
+                    // don't match. Relative targets (".ui.MainActivity",
+                    // resolved against the package at parse time) don't need
+                    // rewriting, so this only fires when the target is
+                    // fully-qualified with the old package.
+                    tag == "activity-alias" && name == "targetActivity" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
                     // Custom permission declarations. Permission names are
                     // unique per-device, not per-package, so leaving these
                     // unchanged collides with the already-installed
