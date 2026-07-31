@@ -50,7 +50,10 @@ class MainActivity : AppCompatActivity() {
     private val excludedPackagePrefixes = listOf(
         "com.google.",       // covers com.google.android.gms, GSF, YouTube, Gmail, Maps, etc.
         "com.android.vending", // Play Store
-        "com.android.chrome"   // Chrome ships under com.android.*, not com.google.*
+        "com.android.chrome",  // Chrome (stable) ships under com.android.*, not com.google.*
+        "com.chrome.beta",     // Chrome Beta
+        "com.chrome.dev",      // Chrome Dev
+        "com.chrome.canary"    // Chrome Canary
     )
 
     private fun isExcludedFromCloning(packageName: String): Boolean =
