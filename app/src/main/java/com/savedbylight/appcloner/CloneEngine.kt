@@ -97,8 +97,26 @@ class CloneEngine(private val context: Context) {
 
     /**
      * Overload accepting target package name explicitly.
+     *
+     * Tries a silent root install first (no PackageInstaller UI at all —
+     * this app *is* the installer for its own clones). Only falls back to
+     * the system installer / third-party installer handoff below if root
+     * isn't available or the root install itself fails, so this still
+     * works on unrooted devices.
      */
     fun launchInstall(targetPackageName: String?, apkFiles: List<File>) {
+        if (RootInstaller.isRootAvailable()) {
+            try {
+                Logger.log("Root available — installing ${apkFiles.size} APK(s) via root shell, skipping installer UI")
+                RootInstaller.installApksAsRoot(targetPackageName, apkFiles)
+                return
+            } catch (e: Exception) {
+                Logger.log("Root install failed (${e.javaClass.simpleName}: ${e.message}); falling back to system installer")
+            }
+        } else {
+            Logger.log("Root not available; using system installer")
+        }
+
         val installerPackage = Companion.getPreferredInstallerPackage(context)
         if (installerPackage != null && apkFiles.size == 1) {
             Logger.log("Routing install through third-party installer: $installerPackage")
