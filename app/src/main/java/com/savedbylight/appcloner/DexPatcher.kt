@@ -61,14 +61,22 @@ object DexPatcher {
             override fun getInstructionRewriter(rewriters: Rewriters): Rewriter<Instruction> {
                 return object : Rewriter<Instruction> {
                     override fun rewrite(instruction: Instruction): Instruction {
-                        if (instruction !is ReferenceInstruction || instruction !is OneRegisterInstruction) {
-                            return instruction
-                        }
+                        // Read opcode off `instruction` while its static type is still the
+                        // plain `Instruction` parameter type. Narrowing `instruction` itself
+                        // via `is` checks below would smart-cast it to an intersection type
+                        // that implements both ReferenceInstruction.opcode and
+                        // OneRegisterInstruction.opcode, which is an unresolvable overload
+                        // ambiguity in Kotlin — so we deliberately don't narrow the parameter,
+                        // and instead cast into separate local vals.
                         val opcode = instruction.opcode
                         if (opcode != Opcode.CONST_STRING && opcode != Opcode.CONST_STRING_JUMBO) {
                             return instruction
                         }
-                        val ref = instruction.reference
+
+                        val refInsn = instruction as? ReferenceInstruction ?: return instruction
+                        val regInsn = instruction as? OneRegisterInstruction ?: return instruction
+
+                        val ref = refInsn.reference
                         if (ref !is StringReference) return instruction
                         val original = ref.string
 
@@ -83,9 +91,9 @@ object DexPatcher {
 
                         val newRef = ImmutableStringReference(replacement)
                         return if (opcode == Opcode.CONST_STRING_JUMBO) {
-                            ImmutableInstruction31c(opcode, instruction.registerA, newRef)
+                            ImmutableInstruction31c(opcode, regInsn.registerA, newRef)
                         } else {
-                            ImmutableInstruction21c(opcode, instruction.registerA, newRef)
+                            ImmutableInstruction21c(opcode, regInsn.registerA, newRef)
                         }
                     }
                 }
