@@ -465,4 +465,50 @@ class CloneEngine(private val context: Context) {
                 PendingIntent.FLAG_UPDATE_CURRENT
             }
 
-            val pendingIntent = PendingIntent.ge
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                sessionId,
+                intent,
+                pendingIntentFlags
+            )
+
+            session.commit(pendingIntent.intentSender)
+            Logger.log("Committed install session $sessionId")
+        } catch (e: Exception) {
+            session?.abandon()
+            Logger.log("Session $sessionId failed: ${e.message}")
+            throw e
+        } finally {
+            session?.close()
+        }
+    }
+
+    companion object {
+        private val COMPONENT_TAGS_FOR_PROCESS = setOf(
+            "application", "activity", "activity-alias",
+            "service", "receiver", "provider"
+        )
+
+        private val PERMISSION_DECLARATION_TAGS = setOf("permission", "permission-group", "permission-tree")
+        private val PERMISSION_REFERENCE_ATTRS = setOf("permission", "readPermission", "writePermission")
+
+        private const val PREFS_NAME = "app_cloner_prefs"
+        private const val PREF_KEY_INSTALLER_PACKAGE = "preferred_installer_package"
+
+        fun setPreferredInstallerPackage(context: Context, packageName: String?) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .apply {
+                    if (packageName.isNullOrBlank()) remove(PREF_KEY_INSTALLER_PACKAGE)
+                    else putString(PREF_KEY_INSTALLER_PACKAGE, packageName)
+                }
+                .apply()
+        }
+
+        fun getPreferredInstallerPackage(context: Context): String? {
+            val pkg = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(PREF_KEY_INSTALLER_PACKAGE, null)
+            return if (pkg.isNullOrBlank()) null else pkg
+        }
+    }
+}
