@@ -31,9 +31,6 @@ import java.util.zip.ZipOutputStream
 
 class CloneEngine(private val context: Context) {
 
-    /**
-     * Entry point called by MainActivity passing an InstalledApp object.
-     */
     fun cloneApp(app: InstalledApp): List<File> {
         val pkgName = app.packageName
         val targetPackageName = "$pkgName.clone1"
@@ -41,31 +38,23 @@ class CloneEngine(private val context: Context) {
         return cloneApp(appInfo, targetPackageName)
     }
 
-    /**
-     * Overload for direct ApplicationInfo input without explicit target name.
-     */
     fun cloneApp(appInfo: ApplicationInfo): List<File> {
         val targetPackageName = "${appInfo.packageName}.clone1"
         return cloneApp(appInfo, targetPackageName)
     }
 
-    /**
-     * Core cloning routine that extracts, rewrites, and signs base and split APKs.
-     */
     fun cloneApp(appInfo: ApplicationInfo, targetPackageName: String): List<File> {
         val workDir = File(context.cacheDir, "clone_work_$targetPackageName").apply { mkdirs() }
         val clonedApkFiles = mutableListOf<File>()
 
         val oldPackageName = appInfo.packageName
 
-        // 1. Process Base APK
         val baseSourceFile = File(appInfo.sourceDir)
         val baseTargetFile = File(workDir, "base_signed.apk")
         Logger.log("Processing Base APK: ${baseSourceFile.name}")
         processSingleApk(baseSourceFile, baseTargetFile, oldPackageName, targetPackageName, badgeIcon = true)
         clonedApkFiles.add(baseTargetFile)
 
-        // 2. Process Split APKs (if present)
         val splitDirs = appInfo.splitSourceDirs
         if (!splitDirs.isNullOrEmpty()) {
             Logger.log("Found ${splitDirs.size} split APKs. Processing splits...")
@@ -73,8 +62,6 @@ class CloneEngine(private val context: Context) {
                 val splitSourceFile = File(splitPath)
                 val splitTargetFile = File(workDir, "split_${index}_signed.apk")
                 Logger.log("Processing Split APK [$index]: ${splitSourceFile.name}")
-                // Launcher icon assets live in the base APK; splits don't
-                // need (and shouldn't get) their own badge pass.
                 processSingleApk(splitSourceFile, splitTargetFile, oldPackageName, targetPackageName, badgeIcon = false)
                 clonedApkFiles.add(splitTargetFile)
             }
@@ -83,31 +70,10 @@ class CloneEngine(private val context: Context) {
         return clonedApkFiles
     }
 
-
-    /**
-     * Entry point called by MainActivity passing a List<File> of APKs.
-     * Installs directly via [RootInstaller] — see the overload below for
-     * why there's no PackageInstaller/third-party fallback.
-     */
     fun launchInstall(apkFiles: List<File>) {
         launchInstall(null, apkFiles)
     }
 
-    /**
-     * Overload accepting target package name explicitly.
-     *
-     * This app is its own installer for its clones: it always installs via
-     * root ([RootInstaller]) and never hands the APK to the system
-     * PackageInstaller UI or a third-party installer app. There is
-     * deliberately no fallback to [installPackageSession] or
-     * [installViaThirdPartyInstaller] here — either of those would defeat
-     * the point by popping an install confirmation screen. Both methods are
-     * kept below only in case a caller wants to invoke them explicitly
-     * (e.g. a future "share APK" action that's supposed to prompt).
-     *
-     * @throws IllegalStateException if the device isn't rooted / root
-     *   access wasn't granted to this app.
-     */
     fun launchInstall(targetPackageName: String?, apkFiles: List<File>) {
         if (!RootInstaller.isRootAvailable()) {
             Logger.log("Root not available — cannot install without the system installer UI")
@@ -121,29 +87,11 @@ class CloneEngine(private val context: Context) {
         RootInstaller.installApksAsRoot(targetPackageName, apkFiles)
     }
 
-    /**
-     * Combined execution method to clone and immediately initiate installation.
-     */
     fun cloneAndInstallApp(appInfo: ApplicationInfo, targetPackageName: String) {
         val files = cloneApp(appInfo, targetPackageName)
         launchInstall(targetPackageName, files)
     }
 
-    /**
-     * Hands a single APK off to a specific third-party installer app via
-     * ACTION_VIEW, instead of using the system's own PackageInstaller
-     * session flow. The target app is responsible for whatever install UI
-     * (or lack thereof) it presents — App Cloner has no visibility into or
-     * control over that once the intent is dispatched.
-     *
-     * Only works for a single, split-free APK: ACTION_VIEW's
-     * "application/vnd.android.package-archive" contract is a single file,
-     * so a base+splits set can't go through this path — see [launchInstall].
-     *
-     * @param installerPackageName package name of the installer app to
-     *   target directly (skips the chooser). Pass null to let the user pick
-     *   from a chooser of every app that can handle an APK-install intent.
-     */
     fun installViaThirdPartyInstaller(
         context: Context,
         apkFile: File,
@@ -168,10 +116,6 @@ class CloneEngine(private val context: Context) {
             }
         }
 
-        // If we targeted a specific package and it can't actually handle
-        // this intent (not installed, or doesn't register for it), fail
-        // loudly and let the caller decide whether to retry with the
-        // system installer rather than silently no-op.
         if (!installerPackageName.isNullOrEmpty() &&
             intent.resolveActivity(context.packageManager) == null
         ) {
@@ -188,10 +132,6 @@ class CloneEngine(private val context: Context) {
         context.startActivity(intent)
     }
 
-    /**
-     * Handles binary XML rewriting and signing for an individual APK file.
-     * Guarantees the destination file exists on disk to prevent ENOENT errors during install.
-     */
     private fun processSingleApk(
         source: File,
         destination: File,
@@ -201,19 +141,9 @@ class CloneEngine(private val context: Context) {
     ) {
         val tempUnsigned = File.createTempFile("temp_unsigned", ".apk", context.cacheDir)
         try {
-            // Copy source APK to temporary buffer
             source.copyTo(tempUnsigned, overwrite = true)
-
-            // Rewrite binary AXML manifest parameters and (for the base
-            // APK) badge the launcher icon, in place inside the zip
             rewriteApkContents(tempUnsigned, oldPackageName, newPackageName, badgeIcon)
-
-            // Re-sign modified APK binary and output to destination. Every
-            // APK in a clone (base + splits) must be signed with the SAME
-            // key or the install session will be rejected as inconsistent.
             signApkBinary(tempUnsigned, destination)
-
-            // Sanity validation to guarantee destination file existence
             if (!destination.exists() || destination.length() == 0L) {
                 throw IOException("Failed to generate destination APK at: ${destination.absolutePath}")
             }
@@ -224,16 +154,6 @@ class CloneEngine(private val context: Context) {
         }
     }
 
-    /** Replaces the AndroidManifest.xml entry inside apkFile's zip with a
-     *  package-rewritten version, leaving every other entry (resources.arsc,
-     *  classes.dex, native libs, etc.) byte-for-byte untouched.
-     *
-     *  Note: java.nio.file's "jar:" FileSystemProvider (used in an earlier
-     *  version of this method) is a desktop-JDK-only feature — it compiles
-     *  fine against the Android SDK stubs but throws
-     *  ProviderNotFoundException at runtime, since Android doesn't ship
-     *  ZipFileSystemProvider. java.util.zip, used here instead, is fully
-     *  supported on-device. */
     private fun rewriteApkContents(
         apkFile: File,
         oldPackageName: String,
@@ -258,9 +178,6 @@ class CloneEngine(private val context: Context) {
 
                         val outEntry = ZipEntry(entry.name)
                         if (entry.method == ZipEntry.STORED) {
-                            // STORED entries require exact size/CRC to be
-                            // declared up front; DEFLATED entries let
-                            // ZipOutputStream compute these on the fly.
                             outEntry.method = ZipEntry.STORED
                             outEntry.size = outBytes.size.toLong()
                             outEntry.compressedSize = outBytes.size.toLong()
@@ -281,14 +198,6 @@ class CloneEngine(private val context: Context) {
         }
     }
 
-    /** Matches common launcher-icon file naming conventions across density
-     *  buckets (res/mipmap-*, res/drawable-*): standard, round, and
-     *  adaptive-icon foreground/background raster assets. Adaptive-icon
-     *  layers defined as vector-drawable XML (rather than PNG/WebP) are
-     *  left untouched — badging those would require a full resource
-     *  compile pass, out of scope here. This is a best-effort visual aid,
-     *  not a correctness-critical rewrite, so silently skipping unmatched
-     *  formats is acceptable. */
     private fun isLauncherIconEntry(entryName: String): Boolean {
         val lower = entryName.lowercase()
         if (!(lower.startsWith("res/mipmap") || lower.startsWith("res/drawable"))) return false
@@ -296,13 +205,6 @@ class CloneEngine(private val context: Context) {
         return lower.contains("ic_launcher")
     }
 
-    /** Overlays a small badge (orange circle, ring, "C") onto a launcher
-     *  icon's bottom-right corner so a clone is visually distinguishable
-     *  from the original app in the launcher — both for the user's own
-     *  sanity and because a clone that's pixel-identical to a well-known
-     *  app under a different package name is exactly what impersonation
-     *  heuristics look for. Falls back to the original bytes untouched if
-     *  decoding fails for any reason (e.g. an unexpected image format). */
     private fun badgeLauncherIcon(entryName: String, bytes: ByteArray): ByteArray {
         return try {
             val original = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return bytes
@@ -360,10 +262,6 @@ class CloneEngine(private val context: Context) {
             .sign()
     }
 
-    /** Element tags whose "android:name" attribute is a fully-qualified
-     *  component class name (or, for <application>, the Application subclass)
-     *  rather than an arbitrary key — the only tags where rewriting "name"
-     *  is actually correct. */
     private fun rewritePackageInAxml(manifestBytes: ByteArray, oldPkg: String, newPkg: String): ByteArray {
         Logger.log("AXML: parsing manifest (${manifestBytes.size} bytes)")
         val reader = AxmlReader(manifestBytes)
@@ -380,11 +278,6 @@ class CloneEngine(private val context: Context) {
                 return RewritingNodeVisitor(superVisitor, safeName, oldPkg, newPkg)
             }
 
-            // AxmlReader delivers namespace declarations (xmlns:android=...)
-            // straight to the root AxmlVisitor, bypassing child()/attr()
-            // entirely — a callback we had zero visibility into until now.
-            // AxmlWriter.ns() wraps `uri` into a StringItem with no null
-            // check, same class of bug as everything else here.
             override fun ns(prefix: String?, uri: String?, ln: Int) {
                 val safeUri = uri ?: run {
                     Logger.log("AXML: namespace declaration with null uri (prefix=$prefix) — substituting empty string")
@@ -398,17 +291,7 @@ class CloneEngine(private val context: Context) {
         return writer.toByteArray()
     }
 
-    /** Recursively walks manifest nodes, tracking each element's tag name so
-     *  attribute rewrites can be scoped to where a package-name substitution
-     *  is actually correct:
-     *   - <manifest package="...">                        — exact match
-     *   - <provider android:authorities="...">             — substring (can be a comma list)
-     *   - <permission>, <permission-group>, <permission-tree> android:name="...")
-     *   - <uses-permission android:name="...">             — if it starts with old package
-     *   - android:permission / readPermission / writePermission on any component
-     *  Everything else (component class names, meta-data, intent-filter, etc.)
-     *  is left untouched, even if it happens to contain the package substring. */
-    private class RewritingNodeVisitor(
+    private inner class RewritingNodeVisitor(
         parent: NodeVisitor,
         private val tag: String?,
         private val oldPkg: String,
@@ -419,24 +302,158 @@ class CloneEngine(private val context: Context) {
             var newValue = value
             if (value is String) {
                 newValue = when {
-                    // <manifest package="...">
                     tag == "manifest" && name == "package" && value == oldPkg ->
                         newPkg
 
-                    // <provider android:authorities="..."> (may be comma-separated)
                     tag == "provider" && name == "authorities" && value.contains(oldPkg) ->
                         value.replace(oldPkg, newPkg)
 
-                    // Permission declarations
-                    tag in PERMISSION_DECLARATION_TAGS && name == "name" && value.startsWith(oldPkg) ->
+                    // Use outer class's companion constants
+                    tag in CloneEngine.PERMISSION_DECLARATION_TAGS && name == "name" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
 
-                    // <uses-permission android:name="..."> if it's a custom permission
                     tag == "uses-permission" && name == "name" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
 
-                    // Permission reference attributes (permission, readPermission, writePermission)
-                    name in PERMISSION_REFERENCE_ATTRS && value.startsWith(oldPkg) ->
+                    name in CloneEngine.PERMISSION_REFERENCE_ATTRS && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
 
-                    // (Optional) 
+                    tag in CloneEngine.COMPONENT_TAGS_FOR_PROCESS && name == "process" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+
+                    else -> value
+                }
+            }
+
+            // Patch ValueWrapper.raw if null (reflection hack)
+            if (newValue is ValueWrapper && newValue.raw == null) {
+                Logger.log("AXML: ValueWrapper with null raw text for attr '$name' on <$tag> (resourceId=0x${resourceId.toString(16)}, type=$type) — substituting empty string")
+                try {
+                    val rawField = ValueWrapper::class.java.getDeclaredField("raw")
+                    rawField.isAccessible = true
+                    rawField.set(newValue, "")
+                } catch (e: Exception) {
+                    Logger.log("AXML: reflection patch of ValueWrapper.raw failed: ${e.javaClass.simpleName}: ${e.message}")
+                }
+            }
+
+            val safeName = name ?: run {
+                Logger.log("AXML: attribute with null name at resourceId=0x${resourceId.toString(16)} (type=$type) — substituting empty string")
+                ""
+            }
+            var safeValue = newValue
+            if (type == AxmlVisitor.TYPE_STRING && safeValue == null) {
+                Logger.log("AXML: null string value for attr '$safeName' on <$tag> (resourceId=0x${resourceId.toString(16)}) — substituting empty string")
+                safeValue = ""
+            }
+
+            super.attr(ns, safeName, resourceId, type, safeValue)
+        }
+
+        override fun child(ns: String?, name: String?): NodeVisitor {
+            val safeName = name ?: run {
+                Logger.log("AXML: child element with null tag name under <$tag> — substituting empty string")
+                ""
+            }
+            return RewritingNodeVisitor(super.child(ns, safeName), safeName, oldPkg, newPkg)
+        }
+
+        override fun text(lineNumber: Int, value: String?) {
+            val safeValue = value ?: run {
+                Logger.log("AXML: text node with null value under <$tag> at line $lineNumber — substituting empty string")
+                ""
+            }
+            super.text(lineNumber, safeValue)
+        }
+    }
+
+    private fun installPackageSession(context: Context, packageName: String?, apkFiles: List<File>) {
+        if (apkFiles.isEmpty()) {
+            throw IllegalArgumentException("No APK files provided for installation.")
+        }
+
+        val packageInstaller = context.packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        if (!packageName.isNullOrEmpty()) {
+            params.setAppPackageName(packageName)
+        }
+
+        val sessionId = packageInstaller.createSession(params)
+        var session: PackageInstaller.Session? = null
+
+        try {
+            session = packageInstaller.openSession(sessionId)
+
+            apkFiles.forEachIndexed { index, file ->
+                if (!file.exists()) {
+                    throw IOException("APK file does not exist: ${file.absolutePath}")
+                }
+
+                val sessionStreamName = if (index == 0) "base.apk" else "split_$index.apk"
+                val outStream = session.openWrite(sessionStreamName, 0, file.length())
+
+                FileInputStream(file).use { inStream ->
+                    inStream.copyTo(outStream)
+                }
+                session.fsync(outStream)
+                outStream.close()
+                Logger.log("Staged $sessionStreamName (${file.length()} bytes) into session $sessionId")
+            }
+
+            val intent = Intent(context, LogActivity::class.java).apply {
+                action = "com.savedbylight.appcloner.INSTALL_COMPLETE"
+            }
+
+            val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                sessionId,
+                intent,
+                pendingIntentFlags
+            )
+
+            session.commit(pendingIntent.intentSender)
+            Logger.log("Committed install session $sessionId")
+        } catch (e: Exception) {
+            session?.abandon()
+            Logger.log("Session $sessionId failed: ${e.message}")
+            throw e
+        } finally {
+            session?.close()
+        }
+    }
+
+    companion object {
+        private val COMPONENT_TAGS_FOR_PROCESS = setOf(
+            "application", "activity", "activity-alias",
+            "service", "receiver", "provider"
+        )
+
+        private val PERMISSION_DECLARATION_TAGS = setOf("permission", "permission-group", "permission-tree")
+        private val PERMISSION_REFERENCE_ATTRS = setOf("permission", "readPermission", "writePermission")
+
+        private const val PREFS_NAME = "app_cloner_prefs"
+        private const val PREF_KEY_INSTALLER_PACKAGE = "preferred_installer_package"
+
+        fun setPreferredInstallerPackage(context: Context, packageName: String?) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .apply {
+                    if (packageName.isNullOrBlank()) remove(PREF_KEY_INSTALLER_PACKAGE)
+                    else putString(PREF_KEY_INSTALLER_PACKAGE, packageName)
+                }
+                .apply()
+        }
+
+        fun getPreferredInstallerPackage(context: Context): String? {
+            val pkg = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(PREF_KEY_INSTALLER_PACKAGE, null)
+            return if (pkg.isNullOrBlank()) null else pkg
+        }
+    }
+}
