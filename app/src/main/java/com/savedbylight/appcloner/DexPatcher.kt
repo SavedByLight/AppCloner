@@ -6,7 +6,6 @@ import org.jf.dexlib2.iface.DexFile
 import org.jf.dexlib2.rewriter.DexRewriter
 import org.jf.dexlib2.rewriter.Rewriter
 import org.jf.dexlib2.rewriter.RewriterModule
-import org.jf.dexlib2.rewriter.Rewriters
 import org.jf.dexlib2.writer.pool.DexPool
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -45,7 +44,7 @@ object DexPatcher {
         var matchCount = 0
 
         val rewriter = DexRewriter(object : RewriterModule() {
-            override fun getStringRewriter(rewriters: Rewriters): Rewriter<String> {
+            override fun getStringRewriter(): Rewriter<String> {
                 return object : Rewriter<String> {
                     override fun rewrite(value: String): String {
                         val newValue = when {
