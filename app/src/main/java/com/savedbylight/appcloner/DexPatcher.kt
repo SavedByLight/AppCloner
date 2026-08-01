@@ -1,11 +1,20 @@
 package com.savedbylight.appcloner
 
+import org.jf.dexlib2.Opcode
 import org.jf.dexlib2.Opcodes
 import org.jf.dexlib2.dexbacked.DexBackedDexFile
 import org.jf.dexlib2.iface.DexFile
+import org.jf.dexlib2.iface.instruction.Instruction
+import org.jf.dexlib2.iface.instruction.OneRegisterInstruction
+import org.jf.dexlib2.iface.instruction.ReferenceInstruction
+import org.jf.dexlib2.iface.reference.StringReference
+import org.jf.dexlib2.immutable.instruction.ImmutableInstruction21c
+import org.jf.dexlib2.immutable.instruction.ImmutableInstruction31c
+import org.jf.dexlib2.immutable.reference.ImmutableStringReference
 import org.jf.dexlib2.rewriter.DexRewriter
 import org.jf.dexlib2.rewriter.Rewriter
 import org.jf.dexlib2.rewriter.RewriterModule
+import org.jf.dexlib2.rewriter.Rewriters
 import org.jf.dexlib2.writer.pool.DexPool
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -23,15 +32,20 @@ import java.io.File
  * no longer matches that literal, so PackageManagerService's "caller must own the target
  * package" check fails and the app crashes in Application#onCreate() before any UI shows.
  *
- * This version rewrites the **entire string pool**, replacing:
- * - any string that exactly equals oldPkg
- * - any string that starts with oldPkg + "/" (flattened component)
- *
- * This is broader than the previous const‑string‑only approach and catches all
- * occurrences without touching class name descriptors (which are stored separately).
+ * Deliberately narrow in scope: this does NOT touch class/type descriptors
+ * (Lcom/github/android/Foo;) — Android happily lets an app's Java package structure
+ * differ from its manifest package/applicationId, so class names are left as-is, same
+ * as the rest of this engine's approach. Only const-string / const-string/jumbo
+ * literals that exactly equal, or start with "<oldPkg>.", are rewritten.
  */
 object DexPatcher {
 
+    /**
+     * @return patched dex bytes, or null if no matching hardcoded string was found —
+     *         callers should keep the original bytes unchanged in that case, both to
+     *         avoid needless work and because a from-scratch dexlib2 write is not
+     *         guaranteed to be byte-identical to the original for unrelated content.
+     */
     fun patchSelfPackageStringConstants(
         dexBytes: ByteArray,
         oldPkg: String,
@@ -44,24 +58,42 @@ object DexPatcher {
         var matchCount = 0
 
         val rewriter = DexRewriter(object : RewriterModule() {
-            override fun getStringRewriter(): Rewriter<String> {
-                return object : Rewriter<String> {
-                    override fun rewrite(value: String): String {
-                        val newValue = when {
-                            value == oldPkg -> {
-                                matchCount++
-                                Logger.log("DexPatcher: replaced string pool entry \"$value\" -> \"$newPkg\"")
-                                newPkg
-                            }
-                            value.startsWith("$oldPkg/") -> {
-                                matchCount++
-                                val replacement = newPkg + value.substring(oldPkg.length)
-                                Logger.log("DexPatcher: replaced string pool entry \"$value\" -> \"$replacement\"")
-                                replacement
-                            }
-                            else -> value
+            override fun getInstructionRewriter(rewriters: Rewriters): Rewriter<Instruction> {
+                return object : Rewriter<Instruction> {
+                    override fun rewrite(instruction: Instruction): Instruction {
+                        val opcode = instruction.opcode
+                        if (opcode != Opcode.CONST_STRING && opcode != Opcode.CONST_STRING_JUMBO) {
+                            return instruction
                         }
-                        return newValue
+
+                        val refInsn = instruction as? ReferenceInstruction ?: return instruction
+                        val regInsn = instruction as? OneRegisterInstruction ?: return instruction
+
+                        val ref = refInsn.reference
+                        if (ref !is StringReference) return instruction
+                        val original = ref.string
+
+                        val replacement: String? = when {
+                            original == oldPkg -> newPkg
+                            else -> {
+                                val slash = original.indexOf('/')
+                                if (slash > 0 && original.substring(0, slash) == oldPkg) {
+                                    newPkg + original.substring(slash)
+                                } else {
+                                    null
+                                }
+                            }
+                        } ?: return instruction
+
+                        matchCount++
+                        Logger.log("DexPatcher: rewriting hardcoded string \"$original\" -> \"$replacement\"")
+
+                        val newRef = ImmutableStringReference(replacement)
+                        return if (opcode == Opcode.CONST_STRING_JUMBO) {
+                            ImmutableInstruction31c(opcode, regInsn.registerA, newRef)
+                        } else {
+                            ImmutableInstruction21c(opcode, regInsn.registerA, newRef)
+                        }
                     }
                 }
             }
@@ -69,11 +101,10 @@ object DexPatcher {
 
         val rewrittenDexFile = rewriter.dexFileRewriter.rewrite(dexFile)
         if (matchCount == 0) {
-            Logger.log("DexPatcher: no matching hardcoded self-package string constants found in dex")
             return null
         }
 
-        Logger.log("DexPatcher: patched $matchCount hardcoded self-package string constant(s) in string pool")
+        Logger.log("DexPatcher: patched $matchCount hardcoded self-package string constant(s)")
 
         val tempOut = File.createTempFile("patched_dex", ".dex", tempDir)
         return try {
