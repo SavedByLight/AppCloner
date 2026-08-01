@@ -308,6 +308,12 @@ class CloneEngine(private val context: Context) {
                     tag == "provider" && name == "authorities" && value.contains(oldPkg) ->
                         value.replace(oldPkg, newPkg)
 
+                    tag == "activity-alias" && name == "targetActivity" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+
+                    name == "parentActivityName" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+
                     // Use outer class's companion constants
                     tag in CloneEngine.PERMISSION_DECLARATION_TAGS && name == "name" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
