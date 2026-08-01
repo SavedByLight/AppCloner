@@ -61,6 +61,15 @@ dependencies {
     // Binary AndroidManifest.xml (AXML) reader/writer (pxb.android.axml.*)
     implementation 'de.upb.cs.swt:axml:2.1.3'
 
+    // dex bytecode reader/writer (org.jf.dexlib2.*), used by DexPatcher.kt to fix
+    // hardcoded self-package string constants (e.g. the GitHub app's
+    // setComponentEnabledSetting SecurityException on clone). Confirmed to exist at
+    // version 2.5.2 on Maven Central as of this writing; if it 404s, this project
+    // migrated to Google's AOSP-hosted fork — try
+    // 'com.android.tools.smali:smali-dexlib2:<latest>' instead.
+    implementation 'org.smali:dexlib2:2.5.2'
+    implementation 'org.smali:util:2.5.2'
+
     // Any other local library jars/aars placed in app/libs/, if present.
     implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
 

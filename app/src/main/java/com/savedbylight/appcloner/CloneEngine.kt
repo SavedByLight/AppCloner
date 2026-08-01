@@ -173,6 +173,8 @@ class CloneEngine(private val context: Context) {
                                 rewritePackageInAxml(bytes, oldPackageName, newPackageName)
                             badgeIcon && isLauncherIconEntry(entry.name) ->
                                 badgeLauncherIcon(entry.name, bytes)
+                            DexPatcher.isDexEntry(entry.name) ->
+                                patchDexEntry(entry.name, bytes, oldPackageName, newPackageName)
                             else -> bytes
                         }
 
@@ -195,6 +197,25 @@ class CloneEngine(private val context: Context) {
             rewrittenApk.copyTo(apkFile, overwrite = true)
         } finally {
             rewrittenApk.delete()
+        }
+    }
+
+    private fun patchDexEntry(
+        entryName: String,
+        bytes: ByteArray,
+        oldPackageName: String,
+        newPackageName: String
+    ): ByteArray {
+        return try {
+            DexPatcher.patchSelfPackageStringConstants(bytes, oldPackageName, newPackageName, context.cacheDir)
+                ?: bytes
+        } catch (e: Exception) {
+            Logger.log(
+                "DexPatcher failed for $entryName: ${e.javaClass.simpleName}: ${e.message} " +
+                    "— leaving this dex unmodified. Apps with hardcoded self-package string " +
+                    "constants in this dex may still crash on setComponentEnabledSetting-style calls."
+            )
+            bytes
         }
     }
 
