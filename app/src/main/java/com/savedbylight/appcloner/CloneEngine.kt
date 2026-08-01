@@ -403,11 +403,11 @@ class CloneEngine(private val context: Context) {
      *  is actually correct:
      *   - <manifest package="...">                        — exact match
      *   - <provider android:authorities="...">             — substring (can be a comma list)
-     *   - <application/activity/activity-alias/service/receiver/provider
-     *     android:name="...">                              — prefix match (FQCN)
-     *   - android:process="..." on any component            — prefix match
-     *  Everything else (meta-data keys/values, intent-filter data, etc.) is
-     *  left untouched, even if it happens to contain the package substring. */
+     *   - <permission>, <permission-group>, <permission-tree> android:name="...")
+     *   - <uses-permission android:name="...">             — if it starts with old package
+     *   - android:permission / readPermission / writePermission on any component
+     *  Everything else (component class names, meta-data, intent-filter, etc.)
+     *  is left untouched, even if it happens to contain the package substring. */
     private class RewritingNodeVisitor(
         parent: NodeVisitor,
         private val tag: String?,
@@ -419,228 +419,24 @@ class CloneEngine(private val context: Context) {
             var newValue = value
             if (value is String) {
                 newValue = when {
+                    // <manifest package="...">
                     tag == "manifest" && name == "package" && value == oldPkg ->
                         newPkg
+
+                    // <provider android:authorities="..."> (may be comma-separated)
                     tag == "provider" && name == "authorities" && value.contains(oldPkg) ->
                         value.replace(oldPkg, newPkg)
-                    tag in COMPONENT_TAGS && name == "name" && value.startsWith(oldPkg) ->
-                        newPkg + value.removePrefix(oldPkg)
-                    tag in COMPONENT_TAGS && name == "process" && value.startsWith(oldPkg) ->
-                        newPkg + value.removePrefix(oldPkg)
-                    // <activity-alias android:targetActivity="..."> points at
-                    // the FQCN of the <activity> it aliases. It's a separate
-                    // attribute from "name" (the alias's own component name,
-                    // already handled above) and was previously left
-                    // untouched, so after rewriting, the alias still pointed
-                    // at the *old* package's activity — which no longer
-                    // exists post-rename, only the aliased-to name changed.
-                    // pm's parser cross-checks this against the parsed
-                    // <activity> list and rejects the whole manifest with
-                    // INSTALL_PARSE_FAILED_MANIFEST_MALFORMED when they
-                    // don't match. Relative targets (".ui.MainActivity",
-                    // resolved against the package at parse time) don't need
-                    // rewriting, so this only fires when the target is
-                    // fully-qualified with the old package.
-                    tag == "activity-alias" && name == "targetActivity" && value.startsWith(oldPkg) ->
-                        newPkg + value.removePrefix(oldPkg)
-                    // Custom permission declarations. Permission names are
-                    // unique per-device, not per-package, so leaving these
-                    // unchanged collides with the already-installed
-                    // original app (INSTALL_FAILED_DUPLICATE_PERMISSION).
+
+                    // Permission declarations
                     tag in PERMISSION_DECLARATION_TAGS && name == "name" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
-                    // Self-references to one of the app's own custom
-                    // permissions (as opposed to a system permission, which
-                    // never starts with the app's package name).
+
+                    // <uses-permission android:name="..."> if it's a custom permission
                     tag == "uses-permission" && name == "name" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
-                    // android:permission / readPermission / writePermission
-                    // on <provider>/<service>/<activity>/<receiver>/
-                    // <application> gate access using a permission name —
-                    // must follow the declaration's rename.
+
+                    // Permission reference attributes (permission, readPermission, writePermission)
                     name in PERMISSION_REFERENCE_ATTRS && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
-                    else -> value
-                }
-            }
 
-            // The actual bug, found by reading pxb.android.axml's source:
-            // NodeImpl#attr() unconditionally does
-            //   a.raw = new StringItem(valueWrapper.raw)
-            // for any attribute value wrapped in a ValueWrapper (used for
-            // resource references — very common for icon/theme/label/etc.
-            // attributes in manifests built by modern aapt2, which often
-            // leaves `raw` null and only populates the resolved `ref` int).
-            // That produces a StringItem whose *contents* are null, but the
-            // StringItem object itself isn't — so Attr.prepare()'s
-            // `if (raw != null)` check lets it straight through, and it
-            // later NPEs deep inside StringItems.prepare(). Nothing we do
-            // to the top-level `value` we're handed can see this, since
-            // `value` (the ValueWrapper) is never null itself — only its
-            // internal `raw` field is. Patch it in place before handing
-            // off to the writer.
-            // `raw` turned out to be a `final` field (Kotlin surfaces it as
-            // `val`, confirmed by the "Val cannot be reassigned" compile
-            // error from direct assignment) — reflection works around that,
-            // since the JVM allows setting final *instance* fields
-            // reflectively at runtime; only compile-time constants are
-            // exempt, and this isn't one.
-            if (newValue is ValueWrapper && newValue.raw == null) {
-                Logger.log("AXML: ValueWrapper with null raw text for attr '$name' on <$tag> (resourceId=0x${resourceId.toString(16)}, type=$type) — substituting empty string")
-                try {
-                    val rawField = ValueWrapper::class.java.getDeclaredField("raw")
-                    rawField.isAccessible = true
-                    rawField.set(newValue, "")
-                } catch (e: Exception) {
-                    Logger.log("AXML: reflection patch of ValueWrapper.raw failed: ${e.javaClass.simpleName}: ${e.message}")
-                }
-            }
-
-            // Defensive guards below: NodeImpl#attr() actually throws if
-            // `name` is null (confirmed by reading its source), so the
-            // null-name branch is dead in practice — kept only in case a
-            // future library version changes that. The TYPE_STRING/null
-            // value branch is a real (if apparently rarer) NPE path in the
-            // same class as the ValueWrapper one above.
-            val safeName = name ?: run {
-                Logger.log("AXML: attribute with null name at resourceId=0x${resourceId.toString(16)} (type=$type) — substituting empty string")
-                ""
-            }
-            var safeValue = newValue
-            if (type == AxmlVisitor.TYPE_STRING && safeValue == null) {
-                Logger.log("AXML: null string value for attr '$safeName' on <$tag> (resourceId=0x${resourceId.toString(16)}) — substituting empty string")
-                safeValue = ""
-            }
-
-            super.attr(ns, safeName, resourceId, type, safeValue)
-        }
-
-        override fun child(ns: String?, name: String?): NodeVisitor {
-            val safeName = name ?: run {
-                Logger.log("AXML: child element with null tag name under <$tag> — substituting empty string")
-                ""
-            }
-            return RewritingNodeVisitor(super.child(ns, safeName), safeName, oldPkg, newPkg)
-        }
-
-        // NodeImpl#text() does `this.text = new StringItem(value)` with no
-        // null check at all — a third callback (alongside attr()/child(),
-        // now both guarded) that we had never overridden, so a null text
-        // value would have passed straight through unguarded until now.
-        override fun text(lineNumber: Int, value: String?) {
-            val safeValue = value ?: run {
-                Logger.log("AXML: text node with null value under <$tag> at line $lineNumber — substituting empty string")
-                ""
-            }
-            super.text(lineNumber, safeValue)
-        }
-    }
-
-    /**
-     * Stages base and split APKs into a PackageInstaller.Session and commits them atomically.
-     */
-    private fun installPackageSession(context: Context, packageName: String?, apkFiles: List<File>) {
-        if (apkFiles.isEmpty()) {
-            throw IllegalArgumentException("No APK files provided for installation.")
-        }
-
-        val packageInstaller = context.packageManager.packageInstaller
-        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-        if (!packageName.isNullOrEmpty()) {
-            params.setAppPackageName(packageName)
-        }
-
-        val sessionId = packageInstaller.createSession(params)
-        var session: PackageInstaller.Session? = null
-
-        try {
-            session = packageInstaller.openSession(sessionId)
-
-            apkFiles.forEachIndexed { index, file ->
-                if (!file.exists()) {
-                    throw IOException("APK file does not exist: ${file.absolutePath}")
-                }
-
-                val sessionStreamName = if (index == 0) "base.apk" else "split_$index.apk"
-                val outStream = session.openWrite(sessionStreamName, 0, file.length())
-
-                FileInputStream(file).use { inStream ->
-                    inStream.copyTo(outStream)
-                }
-                session.fsync(outStream)
-                outStream.close()
-                Logger.log("Staged $sessionStreamName (${file.length()} bytes) into session $sessionId")
-            }
-
-            // Create IntentSender callback for installation status broadcast
-            val intent = Intent(context, LogActivity::class.java).apply {
-                action = "com.savedbylight.appcloner.INSTALL_COMPLETE"
-            }
-
-            val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-            } else {
-                PendingIntent.FLAG_UPDATE_CURRENT
-            }
-
-            val pendingIntent = PendingIntent.getActivity(
-                context,
-                sessionId,
-                intent,
-                pendingIntentFlags
-            )
-
-            session.commit(pendingIntent.intentSender)
-            Logger.log("Committed install session $sessionId")
-        } catch (e: Exception) {
-            session?.abandon()
-            Logger.log("Session $sessionId failed: ${e.message}")
-            throw e
-        } finally {
-            session?.close()
-        }
-    }
-
-    companion object {
-        /** Element tags whose "android:name" attribute is a fully-qualified
-         *  component class name (or, for <application>, the Application
-         *  subclass) rather than an arbitrary key — the only tags where
-         *  rewriting "name" is actually correct. */
-        private val COMPONENT_TAGS = setOf("application", "activity", "activity-alias", "service", "receiver", "provider")
-
-        /** Elements that declare a custom permission by name. */
-        private val PERMISSION_DECLARATION_TAGS = setOf("permission", "permission-group", "permission-tree")
-
-        /** Attributes that reference a (possibly custom) permission name to
-         *  gate access to a component. */
-        private val PERMISSION_REFERENCE_ATTRS = setOf("permission", "readPermission", "writePermission")
-
-        private const val PREFS_NAME = "app_cloner_prefs"
-        private const val PREF_KEY_INSTALLER_PACKAGE = "preferred_installer_package"
-
-        /**
-         * Sets (or clears, by passing null/blank) the third-party installer
-         * package that [launchInstall] should route single-APK clones
-         * through. Intended to be called from a settings UI where the user
-         * picks an installed app (e.g. by package name or from a list of
-         * apps that resolve ACTION_VIEW for an APK mime type).
-         */
-        fun setPreferredInstallerPackage(context: Context, packageName: String?) {
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .apply {
-                    if (packageName.isNullOrBlank()) remove(PREF_KEY_INSTALLER_PACKAGE)
-                    else putString(PREF_KEY_INSTALLER_PACKAGE, packageName)
-                }
-                .apply()
-        }
-
-        /** Public read accessor, e.g. so a settings screen can show the
-         *  currently configured installer. */
-        fun getPreferredInstallerPackage(context: Context): String? {
-            val pkg = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(PREF_KEY_INSTALLER_PACKAGE, null)
-            return if (pkg.isNullOrBlank()) null else pkg
-        }
-    }
-}
+                    // (Optional) 
