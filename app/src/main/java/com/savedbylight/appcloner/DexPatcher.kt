@@ -80,10 +80,31 @@ object DexPatcher {
                         if (ref !is StringReference) return instruction
                         val original = ref.string
 
-                        val replacement = when {
+                        // Only two safe cases:
+                        //  1) the literal IS the bare package name (e.g. one arg of
+                        //     `new ComponentName(pkgLiteral, clsLiteral)`, or an identity
+                        //     check against getPackageName()).
+                        //  2) a flattened "pkg/Class" composite, as used with
+                        //     ComponentName#unflattenFromString — only the segment before
+                        //     '/' is a package identity and safe to rewrite; the segment
+                        //     after '/' is the class's real (unrenamed) Java package and
+                        //     must be left alone.
+                        //
+                        // Deliberately NOT rewriting any other "starts with oldPkg" string:
+                        // a bare fully-qualified class name (e.g. passed as the second arg
+                        // to `new ComponentName(pkg, cls)`) also starts with oldPkg, but
+                        // that class's real package never changes when cloning — rewriting
+                        // it would trade this SecurityException for a ClassNotFoundException.
+                        val replacement: String? = when {
                             original == oldPkg -> newPkg
-                            original.startsWith("$oldPkg.") -> newPkg + original.substring(oldPkg.length)
-                            else -> null
+                            else -> {
+                                val slash = original.indexOf('/')
+                                if (slash > 0 && original.substring(0, slash) == oldPkg) {
+                                    newPkg + original.substring(slash)
+                                } else {
+                                    null
+                                }
+                            }
                         } ?: return instruction
 
                         matchCount++
