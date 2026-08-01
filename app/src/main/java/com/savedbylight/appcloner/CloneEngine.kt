@@ -171,6 +171,10 @@ class CloneEngine(private val context: Context) {
                         val outBytes = when {
                             entry.name == "AndroidManifest.xml" ->
                                 rewritePackageInAxml(bytes, oldPackageName, newPackageName)
+                            // ----- Firebase JSON replacement -----
+                            isFirebaseJsonEntry(entry.name) && FirebaseJsonProvider.getJson() != null ->
+                                FirebaseJsonProvider.getJson()!!
+                            // ------------------------------------
                             badgeIcon && isLauncherIconEntry(entry.name) ->
                                 badgeLauncherIcon(entry.name, bytes)
                             DexPatcher.isDexEntry(entry.name) ->
@@ -199,6 +203,14 @@ class CloneEngine(private val context: Context) {
             rewrittenApk.delete()
         }
     }
+
+    // ---- New helper for Firebase JSON ----
+    private fun isFirebaseJsonEntry(entryName: String): Boolean {
+        val lower = entryName.lowercase()
+        return lower == "res/raw/google_services.json" ||
+               lower == "assets/google-services.json"
+    }
+    // ---------------------------------------
 
     private fun patchDexEntry(
         entryName: String,
