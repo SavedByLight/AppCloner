@@ -100,7 +100,7 @@ object DexPatcher {
             }
         })
 
-        val rewrittenDexFile = rewriter.rewriteDexFile(dexFile)
+        val rewrittenDexFile = rewriter.dexFileRewriter.rewrite(dexFile)
         if (matchCount == 0) {
             return null
         }
