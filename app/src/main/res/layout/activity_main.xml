@@ -19,6 +19,23 @@
         android:layout_marginBottom="8dp"
         android:text="View Logs"/>
 
+    <!-- NEW: Firebase JSON selection -->
+    <Button
+        android:id="@+id/selectFirebaseJsonButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="4dp"
+        android:text="Select Firebase config (google-services.json)"/>
+
+    <Button
+        android:id="@+id/clearFirebaseJsonButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="8dp"
+        android:text="Clear Firebase config"/>
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/appListRecycler"
         android:layout_width="match_parent"
