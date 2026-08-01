@@ -305,8 +305,24 @@ class CloneEngine(private val context: Context) {
                     tag == "manifest" && name == "package" && value == oldPkg ->
                         newPkg
 
-                    tag == "provider" && name == "authorities" && value.contains(oldPkg) ->
-                        value.replace(oldPkg, newPkg)
+                    tag == "provider" && name == "authorities" ->
+                        value.split(";").joinToString(";") { authority ->
+                            if (authority.contains(oldPkg)) {
+                                authority.replace(oldPkg, newPkg)
+                            } else {
+                                // Authority has no relation to the app's own package name
+                                // (e.g. a hardcoded SDK constant) — suffix it with the new
+                                // package to guarantee uniqueness and avoid
+                                // INSTALL_FAILED_CONFLICTING_PROVIDER against the original app.
+                                "$authority.$newPkg"
+                            }
+                        }
+
+                    tag == "activity-alias" && name == "targetActivity" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+
+                    name == "parentActivityName" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
 
                     // Use outer class's companion constants
                     tag in CloneEngine.PERMISSION_DECLARATION_TAGS && name == "name" && value.startsWith(oldPkg) ->
