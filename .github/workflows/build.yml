@@ -5,7 +5,12 @@ on:
     branches: 
       - "main"
       - "staging"
+    tags:
+      - "v*"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -53,4 +58,12 @@ jobs:
         with:
           name: AppCloner-release-apk
           path: app/build/outputs/apk/release/app-release.apk
-          
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/app-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
