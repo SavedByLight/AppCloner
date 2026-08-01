@@ -264,6 +264,15 @@ class CloneEngine(private val context: Context) {
 
     private fun rewritePackageInAxml(manifestBytes: ByteArray, oldPkg: String, newPkg: String): ByteArray {
         Logger.log("AXML: parsing manifest (${manifestBytes.size} bytes)")
+
+        // First pass: collect android:name values declared with a leading dot
+        // (e.g. ".ui.main.MainActivity"). Only these get re-resolved against the
+        // new package attribute by the platform parser. A fully-qualified absolute
+        // name (no leading dot) is used verbatim regardless of the package rename,
+        // even if it happens to start with the same text as the old package.
+        val relativeComponentNames = collectRelativeComponentNames(manifestBytes)
+        Logger.log("AXML: found ${relativeComponentNames.size} relatively-declared component name(s)")
+
         val reader = AxmlReader(manifestBytes)
         val writer = AxmlWriter()
 
@@ -275,7 +284,7 @@ class CloneEngine(private val context: Context) {
                     ""
                 }
                 val superVisitor = super.child(ns, safeName)
-                return RewritingNodeVisitor(superVisitor, safeName, oldPkg, newPkg)
+                return RewritingNodeVisitor(superVisitor, safeName, oldPkg, newPkg, relativeComponentNames)
             }
 
             override fun ns(prefix: String?, uri: String?, ln: Int) {
@@ -291,11 +300,39 @@ class CloneEngine(private val context: Context) {
         return writer.toByteArray()
     }
 
+    private fun collectRelativeComponentNames(manifestBytes: ByteArray): Set<String> {
+        val relativeNames = mutableSetOf<String>()
+        val reader = AxmlReader(manifestBytes)
+        reader.accept(object : AxmlVisitor(null) {
+            override fun child(ns: String?, name: String?): NodeVisitor {
+                return CollectingNodeVisitor(name, relativeNames)
+            }
+        })
+        return relativeNames
+    }
+
+    private inner class CollectingNodeVisitor(
+        private val tag: String?,
+        private val relativeNames: MutableSet<String>
+    ) : NodeVisitor(null) {
+
+        override fun attr(ns: String?, name: String?, resourceId: Int, type: Int, value: Any?) {
+            if (tag in COMPONENT_TAGS_FOR_PROCESS && name == "name" && value is String && value.startsWith(".")) {
+                relativeNames.add(value)
+            }
+        }
+
+        override fun child(ns: String?, name: String?): NodeVisitor {
+            return CollectingNodeVisitor(name, relativeNames)
+        }
+    }
+
     private inner class RewritingNodeVisitor(
         parent: NodeVisitor,
         private val tag: String?,
         private val oldPkg: String,
-        private val newPkg: String
+        private val newPkg: String,
+        private val relativeComponentNames: Set<String>
     ) : NodeVisitor(parent) {
 
         override fun attr(ns: String?, name: String?, resourceId: Int, type: Int, value: Any?) {
@@ -318,10 +355,12 @@ class CloneEngine(private val context: Context) {
                             }
                         }
 
-                    tag == "activity-alias" && name == "targetActivity" && value.startsWith(oldPkg) ->
+                    tag == "activity-alias" && name == "targetActivity" && value.startsWith(oldPkg) &&
+                        ("." + value.removePrefix(oldPkg).removePrefix(".")) in relativeComponentNames ->
                         newPkg + value.removePrefix(oldPkg)
 
-                    name == "parentActivityName" && value.startsWith(oldPkg) ->
+                    name == "parentActivityName" && value.startsWith(oldPkg) &&
+                        ("." + value.removePrefix(oldPkg).removePrefix(".")) in relativeComponentNames ->
                         newPkg + value.removePrefix(oldPkg)
 
                     // Use outer class's companion constants
@@ -371,7 +410,7 @@ class CloneEngine(private val context: Context) {
                 Logger.log("AXML: child element with null tag name under <$tag> — substituting empty string")
                 ""
             }
-            return RewritingNodeVisitor(super.child(ns, safeName), safeName, oldPkg, newPkg)
+            return RewritingNodeVisitor(super.child(ns, safeName), safeName, oldPkg, newPkg, relativeComponentNames)
         }
 
         override fun text(lineNumber: Int, value: String?) {
@@ -426,50 +465,4 @@ class CloneEngine(private val context: Context) {
                 PendingIntent.FLAG_UPDATE_CURRENT
             }
 
-            val pendingIntent = PendingIntent.getActivity(
-                context,
-                sessionId,
-                intent,
-                pendingIntentFlags
-            )
-
-            session.commit(pendingIntent.intentSender)
-            Logger.log("Committed install session $sessionId")
-        } catch (e: Exception) {
-            session?.abandon()
-            Logger.log("Session $sessionId failed: ${e.message}")
-            throw e
-        } finally {
-            session?.close()
-        }
-    }
-
-    companion object {
-        private val COMPONENT_TAGS_FOR_PROCESS = setOf(
-            "application", "activity", "activity-alias",
-            "service", "receiver", "provider"
-        )
-
-        private val PERMISSION_DECLARATION_TAGS = setOf("permission", "permission-group", "permission-tree")
-        private val PERMISSION_REFERENCE_ATTRS = setOf("permission", "readPermission", "writePermission")
-
-        private const val PREFS_NAME = "app_cloner_prefs"
-        private const val PREF_KEY_INSTALLER_PACKAGE = "preferred_installer_package"
-
-        fun setPreferredInstallerPackage(context: Context, packageName: String?) {
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .apply {
-                    if (packageName.isNullOrBlank()) remove(PREF_KEY_INSTALLER_PACKAGE)
-                    else putString(PREF_KEY_INSTALLER_PACKAGE, packageName)
-                }
-                .apply()
-        }
-
-        fun getPreferredInstallerPackage(context: Context): String? {
-            val pkg = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(PREF_KEY_INSTALLER_PACKAGE, null)
-            return if (pkg.isNullOrBlank()) null else pkg
-        }
-    }
-}
+            val pendingIntent = PendingIntent.ge
