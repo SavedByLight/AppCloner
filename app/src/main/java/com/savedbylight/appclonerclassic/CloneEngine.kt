@@ -112,7 +112,7 @@ class CloneEngine(private val context: Context) {
      *
      * This is purely a debugging aid: it lets you run
      *   adb pull /storage/emulated/0/Android/data/<pkg>/files/clone_debug_export /tmp/clone_debug
-     *   adb install-multiple -r /tmp/clone_debug/*.apk
+     *   cd /tmp/clone_debug && adb install-multiple -r *.apk
      * to install the exact same APKs the app generated directly via the
      * `pm` CLI path, which prints the underlying PackageParserException
      * message straight to the terminal instead of swallowing it the way
