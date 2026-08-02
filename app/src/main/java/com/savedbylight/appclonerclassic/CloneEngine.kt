@@ -23,7 +23,10 @@ import org.jf.dexlib2.iface.instruction.formats.Instruction21c
 import org.jf.dexlib2.iface.instruction.formats.Instruction31c
 import org.jf.dexlib2.iface.reference.MethodReference
 import org.jf.dexlib2.iface.reference.StringReference
+import org.jf.dexlib2.iface.value.EncodedValue
+import org.jf.dexlib2.iface.value.StringEncodedValue
 import org.jf.dexlib2.immutable.instruction.ImmutableInstruction21c
+import org.jf.dexlib2.immutable.value.ImmutableStringEncodedValue
 import org.jf.dexlib2.immutable.instruction.ImmutableInstruction31c
 import org.jf.dexlib2.immutable.reference.ImmutableStringReference
 import org.jf.dexlib2.rewriter.DexRewriter
@@ -461,6 +464,20 @@ class CloneEngine(private val context: Context) {
                     }
                 }
             }
+
+            override fun getEncodedValueRewriter(rewriters: Rewriters): Rewriter<EncodedValue> {
+                val defaultRewriter = super.getEncodedValueRewriter(rewriters)
+                return object : Rewriter<EncodedValue> {
+                    override fun rewrite(encodedValue: EncodedValue): EncodedValue {
+                        val rewritten = defaultRewriter.rewrite(encodedValue)
+                        val stringValue = rewritten as? StringEncodedValue ?: return rewritten
+                        val newString = rewriteStringLiteral(stringValue.value) ?: return rewritten
+
+                        matchCount++
+                        return ImmutableStringEncodedValue(newString)
+                    }
+                }
+            }
         }
 
         val dexRewriter = DexRewriter(module)
@@ -636,7 +653,7 @@ class CloneEngine(private val context: Context) {
             Logger.log(
                 "  Rewrote zip contents: $entryCount entries total, " +
                     "manifest rewritten=$manifestRewritten, icons badged=$iconsBadged, " +
-                    "entries page-aligned=$entriesAligned, dex string constants patched=$dexStringsPatched"
+                    "entries page-aligned=$entriesAligned, dex string values patched=$dexStringsPatched"
             )
             if (!manifestRewritten) {
                 Logger.log("  WARNING: no AndroidManifest.xml entry found in this APK — package name was NOT rewritten")
