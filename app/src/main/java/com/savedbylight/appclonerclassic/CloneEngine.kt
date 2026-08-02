@@ -589,6 +589,7 @@ class CloneEngine(private val context: Context) {
      *   - <application/activity/activity-alias/service/receiver/provider
      *     android:name="...">                              — prefix match (FQCN)
      *   - android:process="..." on any component            — prefix match
+     *   - <activity-alias android:targetActivity="...">    — prefix match (FQCN reference)
      *  Everything else (meta-data keys/values, intent-filter data, etc.) is
      *  left untouched, even if it happens to contain the package substring. */
     private class RewritingNodeVisitor(
@@ -609,6 +610,14 @@ class CloneEngine(private val context: Context) {
                     tag in COMPONENT_TAGS && name == "name" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
                     tag in COMPONENT_TAGS && name == "process" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+                    // <activity-alias android:targetActivity="..."> references
+                    // another component by fully-qualified class name, same
+                    // as android:name — must be rewritten identically or the
+                    // alias points at a class that no longer exists under
+                    // the new package (INSTALL_PARSE_FAILED_MANIFEST_
+                    // MALFORMED: "target activity ... not found in manifest").
+                    tag == "activity-alias" && name == "targetActivity" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
                     // Custom permission declarations. Permission names are
                     // unique per-device, not per-package, so leaving these
