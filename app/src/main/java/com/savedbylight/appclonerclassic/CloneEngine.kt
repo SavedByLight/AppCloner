@@ -14,11 +14,17 @@ import android.net.Uri
 import android.os.Build
 import androidx.core.content.FileProvider
 import com.android.apksig.ApkSigner
+import org.jf.dexlib2.Opcodes
+import org.jf.dexlib2.dexbacked.DexBackedDexFile
+import org.jf.dexlib2.iface.instruction.ReferenceInstruction
+import org.jf.dexlib2.iface.reference.MethodReference
+import org.jf.dexlib2.iface.reference.StringReference
 import pxb.android.axml.AxmlReader
 import pxb.android.axml.AxmlVisitor
 import pxb.android.axml.AxmlWriter
 import pxb.android.axml.NodeVisitor
 import pxb.android.axml.ValueWrapper
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -257,13 +263,30 @@ class CloneEngine(private val context: Context) {
      * dex string constants. If the app calls APIs like
      * PackageManager.setComponentEnabledSetting() with a ComponentName built
      * from the original package, the clone will still crash after install.
+     *
+     * Parses each dex file's instructions via dexlib2 rather than doing a
+     * whole-file string search: a raw substring search can't tell "this
+     * component-toggle call and this package-name literal are the same
+     * dangerous call" apart from "these two unrelated strings both happen
+     * to exist somewhere in a 20MB multidex blob" — and since
+     * BuildConfig.APPLICATION_ID puts the app's own package name literal in
+     * nearly every app's dex regardless of how it's used, and toggle APIs
+     * are called by plenty of libraries for unrelated, safe reasons, a
+     * naive co-occurrence check flags far more apps than it should.
+     * Requiring both the toggle call and a matching string literal to
+     * appear as instructions within the *same method* is a much closer
+     * proxy for "this method actually builds a ComponentName from a
+     * hardcoded package name and toggles it" — still not a full dataflow
+     * proof (it doesn't confirm the string is the argument to the call,
+     * just that both occur in the method), but it eliminates the
+     * "anywhere in the whole dex" false-positive surface entirely.
+     *
+     * Known remaining gap: apps that build the package name at runtime via
+     * string concatenation (e.g. context.getPackageName() + ".Foo") rather
+     * than a literal won't have a matching const-string to find, so this
+     * still can't catch every hardcoded-toggle case — only literal ones.
      */
     private fun containsHardcodedSelfPackageComponentToggle(apk: File, packageName: String): Boolean {
-        val toggleNeedles = listOf(
-            "setComponentEnabledSetting",
-            "setApplicationEnabledSetting"
-        )
-
         ZipFile(apk).use { zip ->
             val entries = zip.entries()
             while (entries.hasMoreElements()) {
@@ -271,17 +294,50 @@ class CloneEngine(private val context: Context) {
                 if (!entry.name.endsWith(".dex")) continue
 
                 val dexBytes = zip.getInputStream(entry).use { it.readBytes() }
-                val dexText = String(dexBytes, Charsets.ISO_8859_1)
-
-                val sawToggle = toggleNeedles.any { dexText.contains(it) }
-                val sawSelfPackage = dexText.contains(packageName)
-
-                if (sawToggle && sawSelfPackage) {
+                val dexFile = try {
+                    DexBackedDexFile.fromInputStream(Opcodes.getDefault(), ByteArrayInputStream(dexBytes))
+                } catch (e: Exception) {
                     Logger.log(
-                        "Potentially unsafe clone detected in ${entry.name}: " +
-                            "package-bound component toggles were found alongside '$packageName'."
+                        "Dex safety scan: failed to parse ${entry.name} as a dex file, skipping: " +
+                            "${e.javaClass.simpleName}: ${e.message}"
                     )
-                    return true
+                    continue
+                }
+
+                for (classDef in dexFile.classes) {
+                    for (method in classDef.methods) {
+                        val impl = method.implementation ?: continue
+
+                        var toggleMethodSeen: String? = null
+                        var selfPackageLiteral: String? = null
+
+                        for (instruction in impl.instructions) {
+                            val reference = (instruction as? ReferenceInstruction)?.reference ?: continue
+                            when (reference) {
+                                is MethodReference -> {
+                                    if (reference.name in TOGGLE_METHOD_NAMES) {
+                                        toggleMethodSeen = reference.name
+                                    }
+                                }
+                                is StringReference -> {
+                                    if (reference.string.contains(packageName)) {
+                                        selfPackageLiteral = reference.string
+                                    }
+                                }
+                                else -> {}
+                            }
+                        }
+
+                        if (toggleMethodSeen != null && selfPackageLiteral != null) {
+                            Logger.log(
+                                "Potentially unsafe clone detected in ${entry.name}, method " +
+                                    "${classDef.type}->${method.name}: found call to " +
+                                    "'$toggleMethodSeen' alongside self-package string literal " +
+                                    "'$selfPackageLiteral' in the same method."
+                            )
+                            return true
+                        }
+                    }
                 }
             }
         }
@@ -880,6 +936,15 @@ class CloneEngine(private val context: Context) {
         /** Attributes that reference a (possibly custom) permission name to
          *  gate access to a component. */
         private val PERMISSION_REFERENCE_ATTRS = setOf("permission", "readPermission", "writePermission")
+
+        /** Method names that mutate a component/app's enabled state — the
+         *  kind of call that becomes dangerous when paired with a hardcoded
+         *  reference to the app's own (pre-clone) package name. Used by
+         *  [containsHardcodedSelfPackageComponentToggle]. */
+        private val TOGGLE_METHOD_NAMES = setOf(
+            "setComponentEnabledSetting",
+            "setApplicationEnabledSetting"
+        )
 
         private const val PREFS_NAME = "app_cloner_prefs"
         private const val PREF_KEY_INSTALLER_PACKAGE = "preferred_installer_package"

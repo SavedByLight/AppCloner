@@ -12,7 +12,7 @@ android {
         minSdk 24
         targetSdk 34
         versionCode 1
-        versionName "1.0.2 Classic"
+        versionName "1.0.0 Classic"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -60,6 +60,11 @@ dependencies {
 
     // Binary AndroidManifest.xml (AXML) reader/writer (pxb.android.axml.*)
     implementation 'de.upb.cs.swt:axml:2.1.3'
+
+    // Dex bytecode parsing (org.jf.dexlib2.*) — used to detect hardcoded
+    // self-package component toggles at the instruction level (same method
+    // as the toggle call), rather than a whole-file string search.
+    implementation 'org.smali:dexlib2:2.5.2'
 
     // Any other local library jars/aars placed in app/libs/, if present.
     implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
