@@ -9,9 +9,9 @@
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="AppCloner"
+        android:label="AppClonerClassic"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCloner">
+        android:theme="@style/Theme.AppClonerClassic">
 
         <activity
             android:name=".MainActivity"
@@ -28,7 +28,7 @@
 
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="com.savedbylight.appcloner.fileprovider"
+            android:authorities="com.savedbylight.appclonerclassic.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data
