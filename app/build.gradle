@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace 'com.savedbylight.appcloner'
+    namespace 'com.savedbylight.appclonerclassic'
     compileSdk 34
 
     defaultConfig {
@@ -12,7 +12,7 @@ android {
         minSdk 24
         targetSdk 34
         versionCode 1
-        versionName "1.0"
+        versionName "1.0.00 Classic"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
