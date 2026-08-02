@@ -607,17 +607,16 @@ class CloneEngine(private val context: Context) {
                         newPkg
                     tag == "provider" && name == "authorities" && value.contains(oldPkg) ->
                         value.replace(oldPkg, newPkg)
-                    tag in COMPONENT_TAGS && name == "name" && value.startsWith(oldPkg) ->
-                        newPkg + value.removePrefix(oldPkg)
+                    // NOTE: android:name on <application>/<activity>/<service>/etc.
+                    // and android:targetActivity on <activity-alias> are literal
+                    // fully-qualified class names that must match what's actually
+                    // compiled into classes.dex. The clone pipeline never touches
+                    // the dex, so these must NOT be rewritten to the new package —
+                    // doing so points the manifest at a class that doesn't exist
+                    // anywhere in the APK set (ClassNotFoundException at launch).
+                    // Only android:process is safe to rewrite here, since it's
+                    // just an OS process label, not a class reference.
                     tag in COMPONENT_TAGS && name == "process" && value.startsWith(oldPkg) ->
-                        newPkg + value.removePrefix(oldPkg)
-                    // <activity-alias android:targetActivity="..."> references
-                    // another component by fully-qualified class name, same
-                    // as android:name — must be rewritten identically or the
-                    // alias points at a class that no longer exists under
-                    // the new package (INSTALL_PARSE_FAILED_MANIFEST_
-                    // MALFORMED: "target activity ... not found in manifest").
-                    tag == "activity-alias" && name == "targetActivity" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
                     // Custom permission declarations. Permission names are
                     // unique per-device, not per-package, so leaving these
