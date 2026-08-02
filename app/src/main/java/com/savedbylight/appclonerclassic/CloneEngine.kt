@@ -92,6 +92,7 @@ class CloneEngine(private val context: Context) {
                 "=== Clone finished: ${clonedApkFiles.size} APK(s) produced for $targetPackageName " +
                     "($totalBytes bytes total) ==="
             )
+            exportForDebugging(clonedApkFiles)
             return clonedApkFiles
         } catch (e: Exception) {
             Logger.log(
@@ -99,6 +100,34 @@ class CloneEngine(private val context: Context) {
                     "${e.javaClass.simpleName}: ${e.message} ==="
             )
             throw e
+        }
+    }
+
+    /**
+     * Copies the final signed APKs to app-specific external storage
+     * (getExternalFilesDir), which `adb pull` can read without root even on
+     * a non-debuggable release build — unlike the private cache dir the
+     * clone pipeline normally works in, which requires `run-as` (only
+     * available on debuggable builds) or a rooted device.
+     *
+     * This is purely a debugging aid: it lets you run
+     *   adb pull /storage/emulated/0/Android/data/<pkg>/files/clone_debug_export /tmp/clone_debug
+     *   adb install-multiple -r /tmp/clone_debug/*.apk
+     * to install the exact same APKs the app generated directly via the
+     * `pm` CLI path, which prints the underlying PackageParserException
+     * message straight to the terminal instead of swallowing it the way
+     * the GUI PackageInstaller flow does. Failures here are logged but
+     * never thrown — this must never block a real clone/install.
+     */
+    private fun exportForDebugging(apkFiles: List<File>) {
+        try {
+            val exportDir = File(context.getExternalFilesDir(null), "clone_debug_export")
+            exportDir.deleteRecursively()
+            exportDir.mkdirs()
+            apkFiles.forEach { it.copyTo(File(exportDir, it.name), overwrite = true) }
+            Logger.log("Exported ${apkFiles.size} APK(s) for debugging to: ${exportDir.absolutePath}")
+        } catch (e: Exception) {
+            Logger.log("Debug export failed (non-fatal): ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
