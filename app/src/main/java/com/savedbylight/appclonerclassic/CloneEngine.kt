@@ -619,57 +619,60 @@ class CloneEngine(private val context: Context) {
 
         override fun attr(ns: String?, name: String?, resourceId: Int, type: Int, value: Any?) {
             var newValue = value
-            if (value is String) {
-                newValue = when {
-                    tag == "manifest" && name == "package" && value == oldPkg ->
+
+            // Attribute content can arrive as a plain String OR wrapped in a
+            // ValueWrapper — the latter is what pxb.android.axml hands us
+            // when aapt2 compiled the attribute as a resource reference
+            // (@string/xxx) rather than a literal string. Every rewrite
+            // branch below used to be gated on `value is String`, so any
+            // attribute encoded this way — provider authorities included,
+            // confirmed on TikTok's manifest — never even reached the
+            // rewrite logic, regardless of tag/name matching.
+            val rawText: String? = when (value) {
+                is String -> value
+                is ValueWrapper -> value.raw
+                else -> null
+            }
+
+            if (rawText != null) {
+                val rewritten = when {
+                    tag == "manifest" && name == "package" && rawText == oldPkg ->
                         newPkg
-                    // Provider authorities must be globally unique per-device
-                    // regardless of what they were originally derived from.
-                    // Many apps (TikTok among them) namespace authorities off
-                    // an internal SDK identifier that has nothing to do with
-                    // the app's own applicationId (e.g.
-                    // "com.ss.android.common.multiprocess.SHARE_PROVIDER_
-                    // AUTHORITY1233" inside com.zhiliaoapp.musically), so a
-                    // .contains(oldPkg) gate misses those entirely and ships
-                    // the clone with byte-identical authorities to the
-                    // original — INSTALL_FAILED_CONFLICTING_PROVIDER at
-                    // install time. Rewrite unconditionally: swap oldPkg for
-                    // newPkg where present, and unconditionally suffix with
-                    // newPkg where it isn't, so every authority in the clone
-                    // differs from the original app's regardless of naming
-                    // scheme. android:authorities can be a comma-separated
-                    // list, so each entry is handled independently.
                     tag == "provider" && name == "authorities" ->
-                        rewriteAuthorities(value, oldPkg, newPkg)
-                    // NOTE: android:name on <application>/<activity>/<service>/etc.
-                    // and android:targetActivity on <activity-alias> are literal
-                    // fully-qualified class names that must match what's actually
-                    // compiled into classes.dex. The clone pipeline never touches
-                    // the dex, so these must NOT be rewritten to the new package —
-                    // doing so points the manifest at a class that doesn't exist
-                    // anywhere in the APK set (ClassNotFoundException at launch).
-                    // Only android:process is safe to rewrite here, since it's
-                    // just an OS process label, not a class reference.
-                    tag in COMPONENT_TAGS && name == "process" && value.startsWith(oldPkg) ->
-                        newPkg + value.removePrefix(oldPkg)
-                    // Custom permission declarations. Permission names are
-                    // unique per-device, not per-package, so leaving these
-                    // unchanged collides with the already-installed
-                    // original app (INSTALL_FAILED_DUPLICATE_PERMISSION).
-                    tag in PERMISSION_DECLARATION_TAGS && name == "name" && value.startsWith(oldPkg) ->
-                        newPkg + value.removePrefix(oldPkg)
-                    // Self-references to one of the app's own custom
-                    // permissions (as opposed to a system permission, which
-                    // never starts with the app's package name).
-                    tag == "uses-permission" && name == "name" && value.startsWith(oldPkg) ->
-                        newPkg + value.removePrefix(oldPkg)
-                    // android:permission / readPermission / writePermission
-                    // on <provider>/<service>/<activity>/<receiver>/
-                    // <application> gate access using a permission name —
-                    // must follow the declaration's rename.
-                    name in PERMISSION_REFERENCE_ATTRS && value.startsWith(oldPkg) ->
-                        newPkg + value.removePrefix(oldPkg)
-                    else -> value
+                        rewriteAuthorities(rawText, oldPkg, newPkg)
+                    tag in COMPONENT_TAGS && name == "process" && rawText.startsWith(oldPkg) ->
+                        newPkg + rawText.removePrefix(oldPkg)
+                    tag in PERMISSION_DECLARATION_TAGS && name == "name" && rawText.startsWith(oldPkg) ->
+                        newPkg + rawText.removePrefix(oldPkg)
+                    tag == "uses-permission" && name == "name" && rawText.startsWith(oldPkg) ->
+                        newPkg + rawText.removePrefix(oldPkg)
+                    name in PERMISSION_REFERENCE_ATTRS && rawText.startsWith(oldPkg) ->
+                        newPkg + rawText.removePrefix(oldPkg)
+                    else -> rawText
+                }
+
+                if (rewritten != rawText) {
+                    if (value is ValueWrapper) {
+                        // A ValueWrapper here means this attribute's real,
+                        // serialized data is a numeric resource id
+                        // (TYPE_REFERENCE) pointing into resources.arsc,
+                        // which this pipeline never modifies — patching
+                        // `.raw` alone would be silently discarded on
+                        // write, since the writer serializes the reference,
+                        // not the raw text. Re-emit the whole attribute as
+                        // a literal string instead, which sidesteps
+                        // resources.arsc entirely and guarantees the
+                        // rewritten value is what actually gets installed.
+                        Logger.log(
+                            "AXML: '$name' on <$tag> is a resource reference " +
+                                "(resolved='$rawText') — re-emitting as literal string " +
+                                "'$rewritten' to bypass resources.arsc"
+                        )
+                        super.attr(ns, name, resourceId, AxmlVisitor.TYPE_STRING, rewritten)
+                        return
+                    } else {
+                        newValue = rewritten
+                    }
                 }
             }
 
