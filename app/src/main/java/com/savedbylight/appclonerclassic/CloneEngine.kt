@@ -57,15 +57,26 @@ class CloneEngine(private val context: Context) {
         val clonedApkFiles = mutableListOf<File>()
 
         val oldPackageName = appInfo.packageName
+        val baseSourceFile = File(appInfo.sourceDir)
         val splitDirs = appInfo.splitSourceDirs
         Logger.log(
             "=== Clone started: $oldPackageName -> $targetPackageName " +
                 "(base + ${splitDirs?.size ?: 0} split APK(s), workDir=${workDir.absolutePath}) ==="
         )
 
+        if (containsHardcodedSelfPackageComponentToggle(baseSourceFile, oldPackageName)) {
+            val message = (
+                "This APK appears to hardcode self-package component toggles (for example " +
+                    "setComponentEnabledSetting) against its own applicationId. This cloner " +
+                    "cannot rewrite dex string constants yet, so producing a renamed clone " +
+                    "would likely crash during Application.onCreate()."
+            )
+            Logger.log("ABORTING CLONE: $message")
+            throw IOException(message)
+        }
+
         try {
             // 1. Process Base APK
-            val baseSourceFile = File(appInfo.sourceDir)
             val baseTargetFile = File(workDir, "base_signed.apk")
             Logger.log("Processing Base APK: ${baseSourceFile.name} (${baseSourceFile.length()} bytes)")
             processSingleApk(baseSourceFile, baseTargetFile, oldPackageName, targetPackageName, badgeIcon = true)
@@ -235,6 +246,47 @@ class CloneEngine(private val context: Context) {
             Logger.log("FAILED to launch install intent for ${apkFile.name}: ${e.javaClass.simpleName}: ${e.message}")
             throw e
         }
+    }
+
+    /**
+     * Detects APKs that are very likely to crash when cloned because their code
+     * hardcodes the original package name and mutates component state during
+     * Application startup.
+     *
+     * This project rewrites AndroidManifest.xml, but it does not yet rewrite
+     * dex string constants. If the app calls APIs like
+     * PackageManager.setComponentEnabledSetting() with a ComponentName built
+     * from the original package, the clone will still crash after install.
+     */
+    private fun containsHardcodedSelfPackageComponentToggle(apk: File, packageName: String): Boolean {
+        val toggleNeedles = listOf(
+            "setComponentEnabledSetting",
+            "setApplicationEnabledSetting"
+        )
+
+        ZipFile(apk).use { zip ->
+            val entries = zip.entries()
+            while (entries.hasMoreElements()) {
+                val entry = entries.nextElement()
+                if (!entry.name.endsWith(".dex")) continue
+
+                val dexBytes = zip.getInputStream(entry).use { it.readBytes() }
+                val dexText = String(dexBytes, Charsets.ISO_8859_1)
+
+                val sawToggle = toggleNeedles.any { dexText.contains(it) }
+                val sawSelfPackage = dexText.contains(packageName)
+
+                if (sawToggle && sawSelfPackage) {
+                    Logger.log(
+                        "Potentially unsafe clone detected in ${entry.name}: " +
+                            "package-bound component toggles were found alongside '$packageName'."
+                    )
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 
     /**
