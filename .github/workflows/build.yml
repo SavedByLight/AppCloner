@@ -4,7 +4,7 @@ on:
    push:
     branches: 
       - "next"
-      - "next-test
+      - "next-test"
       - "classic"
       - "classic-test"
     tags:
