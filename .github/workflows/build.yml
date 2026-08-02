@@ -1,7 +1,7 @@
 name: Build APK
 
 on:
-   push:
+  push:
     branches: 
       - "next"
       - "next-test"
