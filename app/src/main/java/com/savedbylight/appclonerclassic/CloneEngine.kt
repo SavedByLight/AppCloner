@@ -57,30 +57,49 @@ class CloneEngine(private val context: Context) {
         val clonedApkFiles = mutableListOf<File>()
 
         val oldPackageName = appInfo.packageName
-
-        // 1. Process Base APK
-        val baseSourceFile = File(appInfo.sourceDir)
-        val baseTargetFile = File(workDir, "base_signed.apk")
-        Logger.log("Processing Base APK: ${baseSourceFile.name}")
-        processSingleApk(baseSourceFile, baseTargetFile, oldPackageName, targetPackageName, badgeIcon = true)
-        clonedApkFiles.add(baseTargetFile)
-
-        // 2. Process Split APKs (if present)
         val splitDirs = appInfo.splitSourceDirs
-        if (!splitDirs.isNullOrEmpty()) {
-            Logger.log("Found ${splitDirs.size} split APKs. Processing splits...")
-            splitDirs.forEachIndexed { index, splitPath ->
-                val splitSourceFile = File(splitPath)
-                val splitTargetFile = File(workDir, "split_${index}_signed.apk")
-                Logger.log("Processing Split APK [$index]: ${splitSourceFile.name}")
-                // Launcher icon assets live in the base APK; splits don't
-                // need (and shouldn't get) their own badge pass.
-                processSingleApk(splitSourceFile, splitTargetFile, oldPackageName, targetPackageName, badgeIcon = false)
-                clonedApkFiles.add(splitTargetFile)
-            }
-        }
+        Logger.log(
+            "=== Clone started: $oldPackageName -> $targetPackageName " +
+                "(base + ${splitDirs?.size ?: 0} split APK(s), workDir=${workDir.absolutePath}) ==="
+        )
 
-        return clonedApkFiles
+        try {
+            // 1. Process Base APK
+            val baseSourceFile = File(appInfo.sourceDir)
+            val baseTargetFile = File(workDir, "base_signed.apk")
+            Logger.log("Processing Base APK: ${baseSourceFile.name} (${baseSourceFile.length()} bytes)")
+            processSingleApk(baseSourceFile, baseTargetFile, oldPackageName, targetPackageName, badgeIcon = true)
+            clonedApkFiles.add(baseTargetFile)
+
+            // 2. Process Split APKs (if present)
+            if (!splitDirs.isNullOrEmpty()) {
+                Logger.log("Found ${splitDirs.size} split APK(s). Processing splits...")
+                splitDirs.forEachIndexed { index, splitPath ->
+                    val splitSourceFile = File(splitPath)
+                    val splitTargetFile = File(workDir, "split_${index}_signed.apk")
+                    Logger.log("Processing Split APK [$index]: ${splitSourceFile.name} (${splitSourceFile.length()} bytes)")
+                    // Launcher icon assets live in the base APK; splits don't
+                    // need (and shouldn't get) their own badge pass.
+                    processSingleApk(splitSourceFile, splitTargetFile, oldPackageName, targetPackageName, badgeIcon = false)
+                    clonedApkFiles.add(splitTargetFile)
+                }
+            } else {
+                Logger.log("No split APKs to process.")
+            }
+
+            val totalBytes = clonedApkFiles.sumOf { it.length() }
+            Logger.log(
+                "=== Clone finished: ${clonedApkFiles.size} APK(s) produced for $targetPackageName " +
+                    "($totalBytes bytes total) ==="
+            )
+            return clonedApkFiles
+        } catch (e: Exception) {
+            Logger.log(
+                "=== Clone FAILED for $oldPackageName -> $targetPackageName: " +
+                    "${e.javaClass.simpleName}: ${e.message} ==="
+            )
+            throw e
+        }
     }
 
 
@@ -120,6 +139,7 @@ class CloneEngine(private val context: Context) {
      * Combined execution method to clone and immediately initiate installation.
      */
     fun cloneAndInstallApp(appInfo: ApplicationInfo, targetPackageName: String) {
+        Logger.log("cloneAndInstallApp: ${appInfo.packageName} -> $targetPackageName")
         val files = cloneApp(appInfo, targetPackageName)
         launchInstall(targetPackageName, files)
     }
@@ -180,7 +200,12 @@ class CloneEngine(private val context: Context) {
             "Dispatching ACTION_VIEW install intent for ${apkFile.name} " +
                 if (installerPackageName.isNullOrEmpty()) "(chooser)" else "(target: $installerPackageName)"
         )
-        context.startActivity(intent)
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Logger.log("FAILED to launch install intent for ${apkFile.name}: ${e.javaClass.simpleName}: ${e.message}")
+            throw e
+        }
     }
 
     /**
@@ -198,6 +223,7 @@ class CloneEngine(private val context: Context) {
         try {
             // Copy source APK to temporary buffer
             source.copyTo(tempUnsigned, overwrite = true)
+            Logger.log("  Copied ${source.name} to temp buffer (${tempUnsigned.length()} bytes)")
 
             // Rewrite binary AXML manifest parameters and (for the base
             // APK) badge the launcher icon, in place inside the zip
@@ -210,8 +236,16 @@ class CloneEngine(private val context: Context) {
 
             // Sanity validation to guarantee destination file existence
             if (!destination.exists() || destination.length() == 0L) {
+                Logger.log("  FAILED: destination APK missing or empty at ${destination.absolutePath}")
                 throw IOException("Failed to generate destination APK at: ${destination.absolutePath}")
             }
+            Logger.log("  Finished ${destination.name} (${destination.length()} bytes)")
+        } catch (e: Exception) {
+            Logger.log(
+                "  FAILED processing ${source.name} -> ${destination.name}: " +
+                    "${e.javaClass.simpleName}: ${e.message}"
+            )
+            throw e
         } finally {
             if (tempUnsigned.exists()) {
                 tempUnsigned.delete()
@@ -236,18 +270,26 @@ class CloneEngine(private val context: Context) {
         badgeIcon: Boolean
     ) {
         val rewrittenApk = File.createTempFile("apk_rewrite", ".apk", context.cacheDir)
+        var entryCount = 0
+        var manifestRewritten = false
+        var iconsBadged = 0
         try {
             ZipFile(apkFile).use { zipIn ->
                 ZipOutputStream(FileOutputStream(rewrittenApk)).use { zipOut ->
                     val entries = zipIn.entries()
                     while (entries.hasMoreElements()) {
                         val entry = entries.nextElement()
+                        entryCount++
                         val bytes = zipIn.getInputStream(entry).use { it.readBytes() }
                         val outBytes = when {
-                            entry.name == "AndroidManifest.xml" ->
+                            entry.name == "AndroidManifest.xml" -> {
+                                manifestRewritten = true
                                 rewritePackageInAxml(bytes, oldPackageName, newPackageName)
-                            badgeIcon && isLauncherIconEntry(entry.name) ->
+                            }
+                            badgeIcon && isLauncherIconEntry(entry.name) -> {
+                                iconsBadged++
                                 badgeLauncherIcon(entry.name, bytes)
+                            }
                             else -> bytes
                         }
 
@@ -271,6 +313,16 @@ class CloneEngine(private val context: Context) {
                 }
             }
             rewrittenApk.copyTo(apkFile, overwrite = true)
+            Logger.log(
+                "  Rewrote zip contents: $entryCount entries total, " +
+                    "manifest rewritten=$manifestRewritten, icons badged=$iconsBadged"
+            )
+            if (!manifestRewritten) {
+                Logger.log("  WARNING: no AndroidManifest.xml entry found in this APK — package name was NOT rewritten")
+            }
+        } catch (e: Exception) {
+            Logger.log("  FAILED rewriting zip contents after $entryCount entries: ${e.javaClass.simpleName}: ${e.message}")
+            throw e
         } finally {
             rewrittenApk.delete()
         }
@@ -342,17 +394,24 @@ class CloneEngine(private val context: Context) {
     }
 
     private fun signApkBinary(inputFile: File, outputFile: File) {
-        val (privateKey, certChain) = SigningIdentity.getOrCreate(context)
-        val signerConfig = ApkSigner.SignerConfig.Builder("CloneKey", privateKey, certChain).build()
-        ApkSigner.Builder(listOf(signerConfig))
-            .setInputApk(inputFile)
-            .setOutputApk(outputFile)
-            .setV1SigningEnabled(true)
-            .setV2SigningEnabled(true)
-            .setV3SigningEnabled(true)
-            .setMinSdkVersion(26)
-            .build()
-            .sign()
+        Logger.log("  Signing ${inputFile.name} -> ${outputFile.name} (v1/v2/v3, minSdk=26)")
+        try {
+            val (privateKey, certChain) = SigningIdentity.getOrCreate(context)
+            val signerConfig = ApkSigner.SignerConfig.Builder("CloneKey", privateKey, certChain).build()
+            ApkSigner.Builder(listOf(signerConfig))
+                .setInputApk(inputFile)
+                .setOutputApk(outputFile)
+                .setV1SigningEnabled(true)
+                .setV2SigningEnabled(true)
+                .setV3SigningEnabled(true)
+                .setMinSdkVersion(26)
+                .build()
+                .sign()
+            Logger.log("  Signed successfully: ${outputFile.name} (${outputFile.length()} bytes)")
+        } catch (e: Exception) {
+            Logger.log("  SIGNING FAILED for ${inputFile.name}: ${e.javaClass.simpleName}: ${e.message}")
+            throw e
+        }
     }
 
     /** Element tags whose "android:name" attribute is a fully-qualified
@@ -523,6 +582,7 @@ class CloneEngine(private val context: Context) {
             throw IllegalArgumentException("No APK files provided for installation.")
         }
 
+        Logger.log("Creating install session for ${packageName ?: "(unspecified package)"}: ${apkFiles.size} APK(s)")
         val packageInstaller = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         if (!packageName.isNullOrEmpty()) {
@@ -530,6 +590,7 @@ class CloneEngine(private val context: Context) {
         }
 
         val sessionId = packageInstaller.createSession(params)
+        Logger.log("Install session created: id=$sessionId")
         var session: PackageInstaller.Session? = null
 
         try {
