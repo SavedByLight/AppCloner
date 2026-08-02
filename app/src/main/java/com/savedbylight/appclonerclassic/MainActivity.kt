@@ -1,4 +1,4 @@
-package com.savedbylight.appcloner
+package com.savedbylight.appclonerclassic
 
 import android.content.Intent
 import android.content.pm.ApplicationInfo

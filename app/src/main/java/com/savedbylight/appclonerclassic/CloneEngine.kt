@@ -1,4 +1,4 @@
-package com.savedbylight.appcloner
+package com.savedbylight.appclonerclassic
 
 import android.app.PendingIntent
 import android.content.Context

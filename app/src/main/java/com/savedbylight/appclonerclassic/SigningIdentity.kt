@@ -1,4 +1,4 @@
-package com.savedbylight.appcloner
+package com.savedbylight.appclonerclassic
 
 import android.content.Context
 import org.bouncycastle.cert.X509v3CertificateBuilder

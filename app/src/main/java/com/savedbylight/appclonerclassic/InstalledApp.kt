@@ -1,4 +1,4 @@
-package com.savedbylight.appcloner
+package com.savedbylight.appclonerclassic
 
 import android.graphics.drawable.Drawable
 
