@@ -87,8 +87,9 @@ class CloneEngine(private val context: Context) {
                 "Hardcoded self-package component toggle(s) detected (for example " +
                     "setComponentEnabledSetting) referencing the original applicationId as a " +
                     "string literal. Proceeding — rewriteDexPackageStrings() below will rewrite " +
-                    "any dex string constant that is an exact match for '$oldPackageName' to " +
-                    "'$targetPackageName' so the toggle keeps targeting the clone's own package " +
+                    "dex string constants that are either an exact match for '$oldPackageName' " +
+                    "or that start with '$oldPackageName.' / '$oldPackageName/' / " +
+                    "'$oldPackageName:' so the toggle keeps targeting the clone's own package " +
                     "instead of the original. Class/type references (e.g. " +
                     "'$oldPackageName.SomeActivity') are untouched, since those live in the " +
                     "type table, not string constants, and must stay pointed at the real class."
@@ -402,17 +403,30 @@ class CloneEngine(private val context: Context) {
             return dexBytes to 0
         }
 
+        fun rewriteStringLiteral(value: String): String? {
+            if (value == oldPackageName) return newPackageName
+
+            val prefix = oldPackageName
+            if (!value.startsWith(prefix) || value.length == prefix.length) return null
+
+            val next = value[prefix.length]
+            return when (next) {
+                '.', '/', '$', ':' -> newPackageName + value.substring(prefix.length)
+                else -> null
+            }
+        }
+
         var matchCount = 0
         val module = object : RewriterModule() {
             override fun getInstructionRewriter(rewriters: Rewriters): Rewriter<Instruction> {
                 return object : Rewriter<Instruction> {
                     override fun rewrite(instruction: Instruction): Instruction {
                         val reference = (instruction as? ReferenceInstruction)?.reference
-                        if (reference !is StringReference || reference.string != oldPackageName) {
-                            return instruction
-                        }
+                        val stringRef = reference as? StringReference ?: return instruction
+                        val rewritten = rewriteStringLiteral(stringRef.string) ?: return instruction
+
                         matchCount++
-                        val newReference = ImmutableStringReference(newPackageName)
+                        val newReference = ImmutableStringReference(rewritten)
                         // A string constant is loaded via one of two
                         // instruction formats depending on how large the
                         // dex's string pool is: 21c (const-string) for a
@@ -471,7 +485,6 @@ class CloneEngine(private val context: Context) {
             tempDex.delete()
         }
     }
-
     /**
      * Handles binary XML rewriting and signing for an individual APK file.
      * Guarantees the destination file exists on disk to prevent ENOENT errors during install.
