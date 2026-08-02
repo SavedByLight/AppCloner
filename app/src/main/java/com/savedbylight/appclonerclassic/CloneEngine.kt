@@ -364,25 +364,13 @@ class CloneEngine(private val context: Context) {
      * Rewrites dex string-constant table entries (the literal operands of
      * `const-string` — i.e. what shows up as [StringReference] above), not
      * type/class references, which live in a separate table and are left
-     * completely alone.
+     * alone.
      *
-     * Deliberately narrow: only a string that is an *exact* match for
-     * [oldPackageName] is rewritten to [newPackageName]. This is what keeps
-     * a self-directed call like
-     *   pm.setComponentEnabledSetting(
-     *       ComponentName(packageNameLiteral, ".DeepLinkAliasActivity"), ...)
-     * targeting the clone's own package after rename, without disturbing
-     * "com.github.android.DeepLinkAliasActivity" — a fully-qualified class
-     * name. That string is longer than the bare package name and so never
-     * matches the equality check here; more fundamentally, a real class
-     * reference (used as an operand to e.g. `new-instance` or `invoke-*`)
-     * is a [org.jf.dexlib2.iface.reference.TypeReference] living in the
-     * dex's type_ids table, which this method never touches — only
-     * [org.jf.dexlib2.iface.reference.StringReference] values are visited.
-     * A class *name* that happens to also appear as a standalone string
-     * constant elsewhere (e.g. passed to Class.forName) would still match
-     * if — and only if — the whole string equals the bare package name,
-     * which a fully-qualified class name never does.
+     * The rewriter handles both dotted package strings
+     * (`com.github.android.DeepLinkAliasActivity`) and slash-form dex
+     * descriptors (`Lcom/github/android/activities/DeepLinkActivity;`), so
+     * hardcoded component toggles keep pointing at the clone's own package
+     * after renaming.
      *
      * Returns the (possibly unmodified) dex bytes plus a count of how many
      * string constants were changed, so [rewriteApkContents] can log it.
@@ -403,17 +391,37 @@ class CloneEngine(private val context: Context) {
             return dexBytes to 0
         }
 
-        fun rewriteStringLiteral(value: String): String? {
-            if (value == oldPackageName) return newPackageName
+        fun isIdentifierPart(ch: Char): Boolean = ch.isLetterOrDigit() || ch == '_' || ch == '$'
 
-            val prefix = oldPackageName
-            if (!value.startsWith(prefix) || value.length == prefix.length) return null
+        fun rewriteToken(value: String, oldToken: String, newToken: String): String? {
+            if (value == oldToken) return newToken
 
-            val next = value[prefix.length]
-            return when (next) {
-                '.', '/', '$', ':' -> newPackageName + value.substring(prefix.length)
-                else -> null
+            var index = value.indexOf(oldToken)
+            while (index >= 0) {
+                val before = if (index > 0) value[index - 1] else null
+                val afterIndex = index + oldToken.length
+                val after = if (afterIndex < value.length) value[afterIndex] else null
+
+                val beforeOk = before == null || !isIdentifierPart(before) || before == 'L' || before == '['
+                val afterOk = after == null || !isIdentifierPart(after)
+
+                if (beforeOk && afterOk) {
+                    return value.substring(0, index) + newToken + value.substring(afterIndex)
+                }
+
+                index = value.indexOf(oldToken, index + 1)
             }
+
+            return null
+        }
+
+        fun rewriteStringLiteral(value: String): String? {
+            val dotted = rewriteToken(value, oldPackageName, newPackageName)
+            if (dotted != null) return dotted
+
+            val slashedOld = oldPackageName.replace('.', '/')
+            val slashedNew = newPackageName.replace('.', '/')
+            return rewriteToken(value, slashedOld, slashedNew)
         }
 
         var matchCount = 0
