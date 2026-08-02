@@ -1,3 +1,9 @@
 <resources>
     <style name="Theme.AppCloner" parent="Theme.Material3.DayNight.NoActionBar"/>
+
+    <!-- Forces the toolbar's overflow menu item labels ("View Logs",
+         "Firebase config") to render in white, regardless of day/night mode. -->
+    <style name="ToolbarPopupMenu" parent="ThemeOverlay.AppCompat.Dark">
+        <item name="android:textColorPrimary">#FFFFFF</item>
+    </style>
 </resources>
