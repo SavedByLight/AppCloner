@@ -17,9 +17,15 @@ import com.android.apksig.ApkSigner
 import org.jf.dexlib2.Opcodes
 import org.jf.dexlib2.dexbacked.DexBackedDexFile
 import org.jf.dexlib2.iface.DexFile
+import org.jf.dexlib2.iface.instruction.Instruction
 import org.jf.dexlib2.iface.instruction.ReferenceInstruction
+import org.jf.dexlib2.iface.instruction.formats.Instruction21c
+import org.jf.dexlib2.iface.instruction.formats.Instruction31c
 import org.jf.dexlib2.iface.reference.MethodReference
 import org.jf.dexlib2.iface.reference.StringReference
+import org.jf.dexlib2.immutable.instruction.ImmutableInstruction21c
+import org.jf.dexlib2.immutable.instruction.ImmutableInstruction31c
+import org.jf.dexlib2.immutable.reference.ImmutableStringReference
 import org.jf.dexlib2.rewriter.DexRewriter
 import org.jf.dexlib2.rewriter.Rewriter
 import org.jf.dexlib2.rewriter.RewriterModule
@@ -398,12 +404,38 @@ class CloneEngine(private val context: Context) {
 
         var matchCount = 0
         val module = object : RewriterModule() {
-            override fun getStringReferenceRewriter(rewriters: Rewriters): Rewriter<String> {
-                return object : Rewriter<String> {
-                    override fun rewrite(value: String): String {
-                        if (value != oldPackageName) return value
+            override fun getInstructionRewriter(rewriters: Rewriters): Rewriter<Instruction> {
+                return object : Rewriter<Instruction> {
+                    override fun rewrite(instruction: Instruction): Instruction {
+                        val reference = (instruction as? ReferenceInstruction)?.reference
+                        if (reference !is StringReference || reference.string != oldPackageName) {
+                            return instruction
+                        }
                         matchCount++
-                        return newPackageName
+                        val newReference = ImmutableStringReference(newPackageName)
+                        // A string constant is loaded via one of two
+                        // instruction formats depending on how large the
+                        // dex's string pool is: 21c (const-string) for a
+                        // string index that fits in 16 bits, 31c
+                        // (const-string/jumbo) otherwise. Both just wrap a
+                        // destination register + a StringReference, so
+                        // preserve everything except the reference itself.
+                        return when (instruction) {
+                            is Instruction21c -> ImmutableInstruction21c(
+                                instruction.opcode, instruction.registerA, newReference
+                            )
+                            is Instruction31c -> ImmutableInstruction31c(
+                                instruction.opcode, instruction.registerA, newReference
+                            )
+                            else -> {
+                                // No dex instruction format other than 21c/31c
+                                // carries a StringReference, but fall back to
+                                // leaving it untouched rather than crashing if
+                                // that ever changes upstream.
+                                matchCount--
+                                instruction
+                            }
+                        }
                     }
                 }
             }
