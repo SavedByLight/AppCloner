@@ -441,7 +441,8 @@ class CloneEngine(private val context: Context) {
             }
         }
 
-        val rewrittenDexFile: DexFile = DexRewriter(module).rewriteDexFile(dexFile)
+        val dexRewriter = DexRewriter(module)
+        val rewrittenDexFile: DexFile = module.getDexFileRewriter(dexRewriter).rewrite(dexFile)
         if (matchCount == 0) {
             // Nothing matched — return the original bytes untouched rather
             // than paying for a DexPool round-trip that would (correctly)
