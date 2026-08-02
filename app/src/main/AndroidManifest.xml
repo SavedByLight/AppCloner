@@ -26,6 +26,10 @@
             android:name=".LogActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".FirebaseConfigActivity"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="com.savedbylight.appcloner.fileprovider"

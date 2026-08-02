@@ -3,13 +3,14 @@ package com.savedbylight.appcloner
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Bundle
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
-import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.Toolbar
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.CoroutineScope
@@ -30,25 +31,10 @@ class MainActivity : AppCompatActivity() {
         progressBar = findViewById(R.id.progressBar)
         recycler.layoutManager = LinearLayoutManager(this)
 
-        findViewById<Button>(R.id.viewLogsButton).setOnClickListener {
-            startActivity(Intent(this, LogActivity::class.java))
-        }
-
-        // ----- New: Firebase JSON selection button -----
-        findViewById<Button>(R.id.selectFirebaseJsonButton).setOnClickListener {
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "application/json"
-            }
-            startActivityForResult(intent, REQUEST_CODE_FIREBASE_JSON)
-        }
-
-        // ----- New: Clear Firebase config button -----
-        findViewById<Button>(R.id.clearFirebaseJsonButton).setOnClickListener {
-            FirebaseJsonProvider.clear()
-            Toast.makeText(this, "Firebase config cleared, will use original", Toast.LENGTH_SHORT).show()
-        }
-        // ---------------------------------------------
+        // "View Logs" and "Firebase config" now live in the toolbar's
+        // overflow menu (see onCreateOptionsMenu/onOptionsItemSelected)
+        // instead of as buttons on the main app-list screen.
+        setSupportActionBar(findViewById<Toolbar>(R.id.toolbar))
 
         CoroutineScope(Dispatchers.Main).launch {
             progressBar.visibility = View.VISIBLE
@@ -118,25 +104,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ----- Handle result from file picker -----
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_CODE_FIREBASE_JSON && resultCode == RESULT_OK) {
-            data?.data?.let { uri ->
-                try {
-                    contentResolver.openInputStream(uri)?.use { stream ->
-                        val json = stream.readBytes()
-                        FirebaseJsonProvider.setJson(json)
-                        Toast.makeText(this, "Firebase JSON loaded (${json.size} bytes)", Toast.LENGTH_SHORT).show()
-                    }
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Failed to read JSON: ${e.message}", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
     }
 
-    companion object {
-        private const val REQUEST_CODE_FIREBASE_JSON = 1001
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_view_logs -> {
+                startActivity(Intent(this, LogActivity::class.java))
+                true
+            }
+            R.id.action_firebase_config -> {
+                startActivity(Intent(this, FirebaseConfigActivity::class.java))
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
     }
 }

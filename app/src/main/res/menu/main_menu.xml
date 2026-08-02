@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item
+        android:id="@+id/action_view_logs"
+        android:title="View Logs"
+        android:showAsAction="never"/>
+
+    <item
+        android:id="@+id/action_firebase_config"
+        android:title="Firebase config"
+        android:showAsAction="never"/>
+
+</menu>
