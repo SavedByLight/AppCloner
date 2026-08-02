@@ -4,11 +4,13 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
-import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.Toolbar
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.CoroutineScope
@@ -29,9 +31,10 @@ class MainActivity : AppCompatActivity() {
         progressBar = findViewById(R.id.progressBar)
         recycler.layoutManager = LinearLayoutManager(this)
 
-        findViewById<Button>(R.id.viewLogsButton).setOnClickListener {
-            startActivity(Intent(this, LogActivity::class.java))
-        }
+        // "View Logs" and "Firebase config" now live in the toolbar's
+        // overflow menu (see onCreateOptionsMenu/onOptionsItemSelected)
+        // instead of as buttons on the main app-list screen.
+        setSupportActionBar(findViewById<Toolbar>(R.id.toolbar))
 
         CoroutineScope(Dispatchers.Main).launch {
             progressBar.visibility = View.VISIBLE
@@ -98,6 +101,25 @@ class MainActivity : AppCompatActivity() {
                     Toast.LENGTH_LONG
                 ).show()
             }
+        }
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_view_logs -> {
+                startActivity(Intent(this, LogActivity::class.java))
+                true
+            }
+            R.id.action_firebase_config -> {
+                startActivity(Intent(this, FirebaseConfigActivity::class.java))
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
         }
     }
 }

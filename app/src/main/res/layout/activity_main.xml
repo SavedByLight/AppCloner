@@ -1,8 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
+
+    <androidx.appcompat.widget.Toolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="?attr/colorPrimary"
+        android:theme="@style/ThemeOverlay.AppCompat.ActionBar"
+        app:popupTheme="@style/ToolbarPopupMenu"
+        app:title="@string/app_name"/>
 
     <TextView
         android:layout_width="match_parent"
@@ -10,14 +20,6 @@
         android:padding="16dp"
         android:textSize="14sp"
         android:text="Pick an app to clone. This rewrites its package name and re-signs it with a new key, so it installs alongside the original."/>
-
-    <Button
-        android:id="@+id/viewLogsButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginHorizontal="16dp"
-        android:layout_marginBottom="8dp"
-        android:text="View Logs"/>
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/appListRecycler"
