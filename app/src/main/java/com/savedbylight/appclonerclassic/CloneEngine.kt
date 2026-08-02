@@ -599,14 +599,48 @@ class CloneEngine(private val context: Context) {
         private val newPkg: String
     ) : NodeVisitor(parent) {
 
+        /** Rewrites a (possibly comma-separated) android:authorities value so
+         *  every authority in it is guaranteed to differ from the original
+         *  app's — swap oldPkg for newPkg where the authority happens to be
+         *  built from the package name, and otherwise unconditionally
+         *  suffix with newPkg, since the authority may be namespaced off
+         *  something entirely unrelated to the applicationId (SDK-internal
+         *  identifiers, e.g. TikTok's com.ss.android.* provider names). */
+        private fun rewriteAuthorities(value: String, oldPkg: String, newPkg: String): String {
+            return value.split(",").joinToString(",") { raw ->
+                val authority = raw.trim()
+                when {
+                    authority.isEmpty() -> authority
+                    authority.contains(oldPkg) -> authority.replace(oldPkg, newPkg)
+                    else -> "$authority.$newPkg"
+                }
+            }
+        }
+
         override fun attr(ns: String?, name: String?, resourceId: Int, type: Int, value: Any?) {
             var newValue = value
             if (value is String) {
                 newValue = when {
                     tag == "manifest" && name == "package" && value == oldPkg ->
                         newPkg
-                    tag == "provider" && name == "authorities" && value.contains(oldPkg) ->
-                        value.replace(oldPkg, newPkg)
+                    // Provider authorities must be globally unique per-device
+                    // regardless of what they were originally derived from.
+                    // Many apps (TikTok among them) namespace authorities off
+                    // an internal SDK identifier that has nothing to do with
+                    // the app's own applicationId (e.g.
+                    // "com.ss.android.common.multiprocess.SHARE_PROVIDER_
+                    // AUTHORITY1233" inside com.zhiliaoapp.musically), so a
+                    // .contains(oldPkg) gate misses those entirely and ships
+                    // the clone with byte-identical authorities to the
+                    // original — INSTALL_FAILED_CONFLICTING_PROVIDER at
+                    // install time. Rewrite unconditionally: swap oldPkg for
+                    // newPkg where present, and unconditionally suffix with
+                    // newPkg where it isn't, so every authority in the clone
+                    // differs from the original app's regardless of naming
+                    // scheme. android:authorities can be a comma-separated
+                    // list, so each entry is handled independently.
+                    tag == "provider" && name == "authorities" ->
+                        rewriteAuthorities(value, oldPkg, newPkg)
                     // NOTE: android:name on <application>/<activity>/<service>/etc.
                     // and android:targetActivity on <activity-alias> are literal
                     // fully-qualified class names that must match what's actually
