@@ -273,9 +273,11 @@ class CloneEngine(private val context: Context) {
         var entryCount = 0
         var manifestRewritten = false
         var iconsBadged = 0
+        var entriesAligned = 0
         try {
             ZipFile(apkFile).use { zipIn ->
-                ZipOutputStream(FileOutputStream(rewrittenApk)).use { zipOut ->
+                val counting = CountingOutputStream(FileOutputStream(rewrittenApk))
+                ZipOutputStream(counting).use { zipOut ->
                     val entries = zipIn.entries()
                     while (entries.hasMoreElements()) {
                         val entry = entries.nextElement()
@@ -302,6 +304,31 @@ class CloneEngine(private val context: Context) {
                             outEntry.size = outBytes.size.toLong()
                             outEntry.compressedSize = outBytes.size.toLong()
                             outEntry.crc = CRC32().apply { update(outBytes) }.value
+
+                            // Re-authoring the zip from scratch discards the
+                            // original build tooling's alignment padding.
+                            // Modern AGP defaults to extractNativeLibs=false,
+                            // which means native .so libraries (and
+                            // resources.arsc) are mmap'd directly out of the
+                            // zip rather than extracted — that only works if
+                            // their data starts on a page boundary. Without
+                            // this, PackageManager rejects the APK at
+                            // install time with a generic "problem with the
+                            // app file" parse failure, even though the zip
+                            // and signature are otherwise perfectly valid.
+                            // Replicates the same 0xd935 "Android alignment"
+                            // extra-field scheme zipalign itself writes, so
+                            // it's also detectable by `zipalign -c -v`.
+                            val alignment = alignmentFor(entry.name)
+                            if (alignment > 1) {
+                                val filenameLen = outEntry.name.toByteArray(Charsets.UTF_8).size
+                                val dataOffsetSansExtra = counting.count + LOCAL_HEADER_FIXED_SIZE + filenameLen
+                                val extra = alignmentExtraField(dataOffsetSansExtra, alignment)
+                                if (extra.isNotEmpty()) {
+                                    outEntry.setExtra(extra)
+                                    entriesAligned++
+                                }
+                            }
                         } else {
                             outEntry.method = ZipEntry.DEFLATED
                         }
@@ -315,7 +342,8 @@ class CloneEngine(private val context: Context) {
             rewrittenApk.copyTo(apkFile, overwrite = true)
             Logger.log(
                 "  Rewrote zip contents: $entryCount entries total, " +
-                    "manifest rewritten=$manifestRewritten, icons badged=$iconsBadged"
+                    "manifest rewritten=$manifestRewritten, icons badged=$iconsBadged, " +
+                    "entries page-aligned=$entriesAligned"
             )
             if (!manifestRewritten) {
                 Logger.log("  WARNING: no AndroidManifest.xml entry found in this APK — package name was NOT rewritten")
@@ -327,6 +355,78 @@ class CloneEngine(private val context: Context) {
             rewrittenApk.delete()
         }
     }
+
+    /** Alignment (in bytes) required for a STORED entry's data to be safely
+     *  mmap-able. Native libraries need page alignment — 16384 satisfies
+     *  both the legacy 4096-byte page size and the newer 16 KB page size
+     *  Android supports — everything else that's stored uncompressed
+     *  (chiefly resources.arsc) only needs the generic 4-byte zip
+     *  alignment. Returns 1 (no alignment needed) for anything else. */
+    private fun alignmentFor(entryName: String): Int {
+        val lower = entryName.lowercase()
+        return when {
+            lower.startsWith("lib/") && lower.endsWith(".so") -> 16384
+            lower == "resources.arsc" -> 4
+            else -> 1
+        }
+    }
+
+    /** Builds a zip "extra field" block that pads a STORED entry's local
+     *  header so its data section starts on an [alignment]-byte boundary —
+     *  the same technique (and extra-field ID, 0xd935) the standalone
+     *  zipalign tool uses. [dataOffsetSansExtra] is the absolute file
+     *  offset where the entry's data would start if this entry had a
+     *  zero-length extra field (i.e. local header + filename, with no
+     *  extra bytes yet) — from there we compute how much padding closes
+     *  the gap to the next alignment boundary. Returns an empty array if
+     *  no padding is needed. */
+    private fun alignmentExtraField(dataOffsetSansExtra: Long, alignment: Int): ByteArray {
+        val remainder = (dataOffsetSansExtra % alignment).toInt()
+        if (remainder == 0) return ByteArray(0)
+        // Total padding (id[2] + size[2] + alignment-value[2] + filler) must
+        // be at least 6 bytes to form one valid TLV block; if the raw gap
+        // is smaller than that, push to the next alignment multiple.
+        var padding = alignment - remainder
+        while (padding < 6) padding += alignment
+        val dataLen = padding - 4 // bytes following the id/size header fields
+        val out = ByteArray(padding)
+        out[0] = 0x35 // extra field id 0xd935, little-endian
+        out[1] = 0xd9.toByte()
+        out[2] = (dataLen and 0xFF).toByte() // extra field data length, little-endian
+        out[3] = ((dataLen shr 8) and 0xFF).toByte()
+        out[4] = (alignment and 0xFF).toByte() // alignment value, little-endian
+        out[5] = ((alignment shr 8) and 0xFF).toByte()
+        // Remaining filler bytes stay zero-initialized.
+        return out
+    }
+
+    /** Thin wrapper that tracks the absolute number of bytes written so far
+     *  so we know the exact file offset ZipOutputStream is about to write
+     *  the next entry's local header at — needed to compute alignment
+     *  padding, since java.util.zip.ZipOutputStream doesn't expose its own
+     *  position. ZipOutputStream writes every header/data byte straight
+     *  through to its underlying stream (it has to, in order to track
+     *  accurate offsets for its own central directory), so this count
+     *  stays exactly in sync with the real file position. */
+    private class CountingOutputStream(private val out: java.io.OutputStream) : java.io.OutputStream() {
+        var count: Long = 0
+            private set
+
+        override fun write(b: Int) {
+            out.write(b)
+            count++
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            out.write(b, off, len)
+            count += len
+        }
+
+        override fun flush() = out.flush()
+        override fun close() = out.close()
+    }
+
+
 
     /** Matches common launcher-icon file naming conventions across density
      *  buckets (res/mipmap-*, res/drawable-*): standard, round, and
@@ -657,6 +757,11 @@ class CloneEngine(private val context: Context) {
 
         private const val PREFS_NAME = "app_cloner_prefs"
         private const val PREF_KEY_INSTALLER_PACKAGE = "preferred_installer_package"
+
+        /** Fixed byte size of a ZIP local file header, before the variable-
+         *  length filename and extra field — used to compute zip-alignment
+         *  padding in [rewriteApkContents]. */
+        private const val LOCAL_HEADER_FIXED_SIZE = 30L
 
         /**
          * Sets (or clears, by passing null/blank) the third-party installer
