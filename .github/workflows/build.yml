@@ -3,9 +3,10 @@ name: Build APK
 on:
   push:
     branches: 
-      - "main"
-      - "staging"
-      - "test"
+      - "next"
+      - "next-test
+      - "classic"
+      - "classic-test"
     tags:
       - "v*"
   workflow_dispatch:
