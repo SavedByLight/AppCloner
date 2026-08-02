@@ -1,4 +1,4 @@
-# App Cloner (Android)
+# AppClonerClassic (Android)
 
 Native Android app that clones an already-installed app so you can run it as
 a second, independent instance (e.g. two WhatsApp accounts) — the same
