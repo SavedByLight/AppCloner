@@ -16,9 +16,15 @@ import androidx.core.content.FileProvider
 import com.android.apksig.ApkSigner
 import org.jf.dexlib2.Opcodes
 import org.jf.dexlib2.dexbacked.DexBackedDexFile
+import org.jf.dexlib2.iface.DexFile
 import org.jf.dexlib2.iface.instruction.ReferenceInstruction
 import org.jf.dexlib2.iface.reference.MethodReference
 import org.jf.dexlib2.iface.reference.StringReference
+import org.jf.dexlib2.rewriter.DexRewriter
+import org.jf.dexlib2.rewriter.Rewriter
+import org.jf.dexlib2.rewriter.RewriterModule
+import org.jf.dexlib2.rewriter.Rewriters
+import org.jf.dexlib2.writer.pool.DexPool
 import pxb.android.axml.AxmlReader
 import pxb.android.axml.AxmlVisitor
 import pxb.android.axml.AxmlWriter
@@ -71,14 +77,16 @@ class CloneEngine(private val context: Context) {
         )
 
         if (containsHardcodedSelfPackageComponentToggle(baseSourceFile, oldPackageName)) {
-            val message = (
-                "This APK appears to hardcode self-package component toggles (for example " +
-                    "setComponentEnabledSetting) against its own applicationId. This cloner " +
-                    "cannot rewrite dex string constants yet, so producing a renamed clone " +
-                    "would likely crash during Application.onCreate()."
+            Logger.log(
+                "Hardcoded self-package component toggle(s) detected (for example " +
+                    "setComponentEnabledSetting) referencing the original applicationId as a " +
+                    "string literal. Proceeding — rewriteDexPackageStrings() below will rewrite " +
+                    "any dex string constant that is an exact match for '$oldPackageName' to " +
+                    "'$targetPackageName' so the toggle keeps targeting the clone's own package " +
+                    "instead of the original. Class/type references (e.g. " +
+                    "'$oldPackageName.SomeActivity') are untouched, since those live in the " +
+                    "type table, not string constants, and must stay pointed at the real class."
             )
-            Logger.log("ABORTING CLONE: $message")
-            throw IOException(message)
         }
 
         try {
@@ -346,6 +354,92 @@ class CloneEngine(private val context: Context) {
     }
 
     /**
+     * Rewrites dex string-constant table entries (the literal operands of
+     * `const-string` — i.e. what shows up as [StringReference] above), not
+     * type/class references, which live in a separate table and are left
+     * completely alone.
+     *
+     * Deliberately narrow: only a string that is an *exact* match for
+     * [oldPackageName] is rewritten to [newPackageName]. This is what keeps
+     * a self-directed call like
+     *   pm.setComponentEnabledSetting(
+     *       ComponentName(packageNameLiteral, ".DeepLinkAliasActivity"), ...)
+     * targeting the clone's own package after rename, without disturbing
+     * "com.github.android.DeepLinkAliasActivity" — a fully-qualified class
+     * name. That string is longer than the bare package name and so never
+     * matches the equality check here; more fundamentally, a real class
+     * reference (used as an operand to e.g. `new-instance` or `invoke-*`)
+     * is a [org.jf.dexlib2.iface.reference.TypeReference] living in the
+     * dex's type_ids table, which this method never touches — only
+     * [org.jf.dexlib2.iface.reference.StringReference] values are visited.
+     * A class *name* that happens to also appear as a standalone string
+     * constant elsewhere (e.g. passed to Class.forName) would still match
+     * if — and only if — the whole string equals the bare package name,
+     * which a fully-qualified class name never does.
+     *
+     * Returns the (possibly unmodified) dex bytes plus a count of how many
+     * string constants were changed, so [rewriteApkContents] can log it.
+     */
+    private fun rewriteDexPackageStrings(
+        entryName: String,
+        dexBytes: ByteArray,
+        oldPackageName: String,
+        newPackageName: String
+    ): Pair<ByteArray, Int> {
+        val dexFile = try {
+            DexBackedDexFile.fromInputStream(Opcodes.getDefault(), ByteArrayInputStream(dexBytes))
+        } catch (e: Exception) {
+            Logger.log(
+                "  Dex string rewrite: failed to parse $entryName, leaving it byte-for-byte " +
+                    "untouched: ${e.javaClass.simpleName}: ${e.message}"
+            )
+            return dexBytes to 0
+        }
+
+        var matchCount = 0
+        val module = object : RewriterModule() {
+            override fun getStringReferenceRewriter(rewriters: Rewriters): Rewriter<String> {
+                return object : Rewriter<String> {
+                    override fun rewrite(value: String): String {
+                        if (value != oldPackageName) return value
+                        matchCount++
+                        return newPackageName
+                    }
+                }
+            }
+        }
+
+        val rewrittenDexFile: DexFile = DexRewriter(module).rewriteDexFile(dexFile)
+        if (matchCount == 0) {
+            // Nothing matched — return the original bytes untouched rather
+            // than paying for a DexPool round-trip that would (correctly)
+            // produce an identical file anyway.
+            return dexBytes to 0
+        }
+
+        val tempDex = File.createTempFile("dex_rewrite", ".dex", context.cacheDir)
+        return try {
+            DexPool.writeTo(tempDex.absolutePath, rewrittenDexFile)
+            val patchedBytes = tempDex.readBytes()
+            Logger.log(
+                "  Dex string rewrite: $entryName — patched $matchCount occurrence(s) of " +
+                    "'$oldPackageName' -> '$newPackageName' in string constants " +
+                    "(${dexBytes.size} -> ${patchedBytes.size} bytes)"
+            )
+            patchedBytes to matchCount
+        } catch (e: Exception) {
+            Logger.log(
+                "  Dex string rewrite: failed to re-encode $entryName after patching " +
+                    "$matchCount occurrence(s), falling back to the original unpatched bytes: " +
+                    "${e.javaClass.simpleName}: ${e.message}"
+            )
+            dexBytes to 0
+        } finally {
+            tempDex.delete()
+        }
+    }
+
+    /**
      * Handles binary XML rewriting and signing for an individual APK file.
      * Guarantees the destination file exists on disk to prevent ENOENT errors during install.
      */
@@ -411,6 +505,7 @@ class CloneEngine(private val context: Context) {
         var manifestRewritten = false
         var iconsBadged = 0
         var entriesAligned = 0
+        var dexStringsPatched = 0
         try {
             ZipFile(apkFile).use { zipIn ->
                 val counting = CountingOutputStream(FileOutputStream(rewrittenApk))
@@ -424,6 +519,13 @@ class CloneEngine(private val context: Context) {
                             entry.name == "AndroidManifest.xml" -> {
                                 manifestRewritten = true
                                 rewritePackageInAxml(bytes, oldPackageName, newPackageName)
+                            }
+                            DEX_ENTRY_PATTERN.matches(entry.name) -> {
+                                val (patchedBytes, patchedCount) = rewriteDexPackageStrings(
+                                    entry.name, bytes, oldPackageName, newPackageName
+                                )
+                                dexStringsPatched += patchedCount
+                                patchedBytes
                             }
                             badgeIcon && isLauncherIconEntry(entry.name) -> {
                                 iconsBadged++
@@ -480,7 +582,7 @@ class CloneEngine(private val context: Context) {
             Logger.log(
                 "  Rewrote zip contents: $entryCount entries total, " +
                     "manifest rewritten=$manifestRewritten, icons badged=$iconsBadged, " +
-                    "entries page-aligned=$entriesAligned"
+                    "entries page-aligned=$entriesAligned, dex string constants patched=$dexStringsPatched"
             )
             if (!manifestRewritten) {
                 Logger.log("  WARNING: no AndroidManifest.xml entry found in this APK — package name was NOT rewritten")
@@ -953,6 +1055,12 @@ class CloneEngine(private val context: Context) {
          *  length filename and extra field — used to compute zip-alignment
          *  padding in [rewriteApkContents]. */
         private const val LOCAL_HEADER_FIXED_SIZE = 30L
+
+        /** Matches a top-level dex entry (classes.dex, classes2.dex, ...)
+         *  but not e.g. an asset or resource file that merely happens to
+         *  end in ".dex" — used to route entries into
+         *  [rewriteDexPackageStrings] in [rewriteApkContents]. */
+        private val DEX_ENTRY_PATTERN = Regex("^classes\\d*\\.dex$")
 
         /**
          * Sets (or clears, by passing null/blank) the third-party installer
