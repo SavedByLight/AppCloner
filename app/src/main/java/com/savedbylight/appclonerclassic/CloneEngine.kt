@@ -16,17 +16,13 @@ import androidx.core.content.FileProvider
 import com.android.apksig.ApkSigner
 import org.jf.dexlib2.Opcodes
 import org.jf.dexlib2.dexbacked.DexBackedDexFile
-import org.jf.dexlib2.iface.DexFile
 import org.jf.dexlib2.iface.instruction.Instruction
 import org.jf.dexlib2.iface.instruction.ReferenceInstruction
 import org.jf.dexlib2.iface.instruction.formats.Instruction21c
 import org.jf.dexlib2.iface.instruction.formats.Instruction31c
 import org.jf.dexlib2.iface.reference.MethodReference
 import org.jf.dexlib2.iface.reference.StringReference
-import org.jf.dexlib2.iface.value.EncodedValue
-import org.jf.dexlib2.iface.value.StringEncodedValue
 import org.jf.dexlib2.immutable.instruction.ImmutableInstruction21c
-import org.jf.dexlib2.immutable.value.ImmutableStringEncodedValue
 import org.jf.dexlib2.immutable.instruction.ImmutableInstruction31c
 import org.jf.dexlib2.immutable.reference.ImmutableStringReference
 import org.jf.dexlib2.rewriter.DexRewriter
@@ -52,9 +48,6 @@ import java.util.zip.ZipOutputStream
 
 class CloneEngine(private val context: Context) {
 
-    /**
-     * Entry point called by MainActivity passing an InstalledApp object.
-     */
     fun cloneApp(app: InstalledApp): List<File> {
         val pkgName = app.packageName
         val targetPackageName = "$pkgName.clone1"
@@ -62,17 +55,11 @@ class CloneEngine(private val context: Context) {
         return cloneApp(appInfo, targetPackageName)
     }
 
-    /**
-     * Overload for direct ApplicationInfo input without explicit target name.
-     */
     fun cloneApp(appInfo: ApplicationInfo): List<File> {
         val targetPackageName = "${appInfo.packageName}.clone1"
         return cloneApp(appInfo, targetPackageName)
     }
 
-    /**
-     * Core cloning routine that extracts, rewrites, and signs base and split APKs.
-     */
     fun cloneApp(appInfo: ApplicationInfo, targetPackageName: String): List<File> {
         val workDir = File(context.cacheDir, "clone_work_$targetPackageName").apply { mkdirs() }
         val clonedApkFiles = mutableListOf<File>()
@@ -85,26 +72,20 @@ class CloneEngine(private val context: Context) {
                 "(base + ${splitDirs?.size ?: 0} split APK(s), workDir=${workDir.absolutePath}) ==="
         )
 
-        // Scan for dangerous methods (those that call setComponentEnabledSetting etc.)
         val dangerousMethods = findDangerousMethods(baseSourceFile, oldPackageName)
         if (dangerousMethods.isNotEmpty()) {
-            Logger.log(
-                "Found ${dangerousMethods.size} dangerous method(s) – " +
-                    "will rewrite package strings unconditionally inside those methods."
-            )
+            Logger.log("Found ${dangerousMethods.size} dangerous method(s) – will rewrite package strings unconditionally inside those methods.")
         } else {
             Logger.log("No dangerous methods detected; using safe token‑based rewriting.")
         }
 
         try {
-            // 1. Process Base APK
             val baseTargetFile = File(workDir, "base_signed.apk")
             Logger.log("Processing Base APK: ${baseSourceFile.name} (${baseSourceFile.length()} bytes)")
             processSingleApk(baseSourceFile, baseTargetFile, oldPackageName, targetPackageName,
                 badgeIcon = true, dangerousMethods = dangerousMethods)
             clonedApkFiles.add(baseTargetFile)
 
-            // 2. Process Split APKs (if present)
             if (!splitDirs.isNullOrEmpty()) {
                 Logger.log("Found ${splitDirs.size} split APK(s). Processing splits...")
                 splitDirs.forEachIndexed { index, splitPath ->
@@ -135,9 +116,6 @@ class CloneEngine(private val context: Context) {
         }
     }
 
-    /**
-     * Copies the final signed APKs to app‑specific external storage for debugging.
-     */
     private fun exportForDebugging(apkFiles: List<File>) {
         try {
             val exportDir = File(context.getExternalFilesDir(null), "clone_debug_export")
@@ -150,10 +128,6 @@ class CloneEngine(private val context: Context) {
         }
     }
 
-
-    /**
-     * Entry point for installation – routes to system or third‑party installer.
-     */
     fun launchInstall(apkFiles: List<File>) {
         launchInstall(null, apkFiles)
     }
@@ -226,15 +200,9 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  DANGEROUS METHOD SCANNER
+    //  DANGEROUS METHOD SCANNER (unchanged)
     // -------------------------------------------------------------------------
 
-    /**
-     * Scans every DEX file and returns a set of method descriptors (e.g.
-     * "Lcom/github/android/GitHubApplication;->onCreate()V") that contain at least
-     * one call to a component‑toggle API **and** at least one string constant
-     * that contains the original package name.
-     */
     private fun findDangerousMethods(apk: File, packageName: String): Set<String> {
         val dangerousMethods = mutableSetOf<String>()
         ZipFile(apk).use { zip ->
@@ -254,7 +222,6 @@ class CloneEngine(private val context: Context) {
                 for (classDef in dexFile.classes) {
                     for (method in classDef.methods) {
                         val impl = method.implementation ?: continue
-
                         var hasToggle = false
                         var hasPackageString = false
 
@@ -262,14 +229,10 @@ class CloneEngine(private val context: Context) {
                             val ref = (instruction as? ReferenceInstruction)?.reference
                             when (ref) {
                                 is MethodReference -> {
-                                    if (ref.name in TOGGLE_METHOD_NAMES) {
-                                        hasToggle = true
-                                    }
+                                    if (ref.name in TOGGLE_METHOD_NAMES) hasToggle = true
                                 }
                                 is StringReference -> {
-                                    if (ref.string.contains(packageName)) {
-                                        hasPackageString = true
-                                    }
+                                    if (ref.string.contains(packageName)) hasPackageString = true
                                 }
                                 else -> {}
                             }
@@ -279,9 +242,7 @@ class CloneEngine(private val context: Context) {
                         if (hasToggle && hasPackageString) {
                             val descriptor = "${classDef.type}->${method.name}${method.parameterTypes}${method.returnType}"
                             dangerousMethods.add(descriptor)
-                            Logger.log(
-                                "Dangerous method: $descriptor (in ${entry.name})"
-                            )
+                            Logger.log("Dangerous method: $descriptor (in ${entry.name})")
                         }
                     }
                 }
@@ -324,7 +285,7 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  REWRITE APK CONTENTS (manifest, dex strings, icon badge)
+    //  REWRITE APK CONTENTS – now with authority extraction
     // -------------------------------------------------------------------------
 
     private fun rewriteApkContents(
@@ -340,6 +301,24 @@ class CloneEngine(private val context: Context) {
         var iconsBadged = 0
         var entriesAligned = 0
         var dexStringsPatched = 0
+
+        // First, extract provider authorities from the original manifest (before any rewrite)
+        val authorityMap = mutableMapOf<String, String>()
+        try {
+            ZipFile(apkFile).use { zip ->
+                val manifestEntry = zip.getEntry("AndroidManifest.xml")
+                if (manifestEntry != null) {
+                    val manifestBytes = zip.getInputStream(manifestEntry).use { it.readBytes() }
+                    extractProviderAuthorities(manifestBytes, oldPackageName, newPackageName, authorityMap)
+                }
+            }
+        } catch (e: Exception) {
+            Logger.log("  Failed to extract authorities from manifest: ${e.message}")
+        }
+        if (authorityMap.isNotEmpty()) {
+            Logger.log("  Extracted ${authorityMap.size} provider authority mappings for DEX rewriting.")
+        }
+
         try {
             ZipFile(apkFile).use { zipIn ->
                 val counting = CountingOutputStream(FileOutputStream(rewrittenApk))
@@ -352,11 +331,13 @@ class CloneEngine(private val context: Context) {
                         val outBytes = when {
                             entry.name == "AndroidManifest.xml" -> {
                                 manifestRewritten = true
+                                // Rewrite manifest, using the same authority mapping logic
                                 rewritePackageInAxml(bytes, oldPackageName, newPackageName)
                             }
                             DEX_ENTRY_PATTERN.matches(entry.name) -> {
                                 val (patched, count) = rewriteDexPackageStrings(
-                                    entry.name, bytes, oldPackageName, newPackageName, dangerousMethods
+                                    entry.name, bytes, oldPackageName, newPackageName,
+                                    dangerousMethods, authorityMap
                                 )
                                 dexStringsPatched += count
                                 patched
@@ -409,22 +390,67 @@ class CloneEngine(private val context: Context) {
         }
     }
 
+    /**
+     * Extracts all provider authorities from the manifest and builds a mapping
+     * from the original authority to the new authority (which will be used in
+     * both the manifest rewrite and DEX string replacement).
+     */
+    private fun extractProviderAuthorities(
+        manifestBytes: ByteArray,
+        oldPkg: String,
+        newPkg: String,
+        map: MutableMap<String, String>
+    ) {
+        try {
+            val reader = AxmlReader(manifestBytes)
+            val visitor = object : AxmlVisitor() {
+                override fun child(ns: String?, name: String?): NodeVisitor {
+                    if (name == "provider") {
+                        return object : NodeVisitor() {
+                            override fun attr(ns: String?, attrName: String?, resourceId: Int, type: Int, value: Any?) {
+                                if (attrName == "authorities") {
+                                    val raw = when (value) {
+                                        is String -> value
+                                        is ValueWrapper -> value.raw
+                                        else -> null
+                                    }
+                                    if (raw != null) {
+                                        val authorities = raw.split(",").map { it.trim() }
+                                        val newAuthorities = authorities.map { auth ->
+                                            if (auth.contains(oldPkg)) {
+                                                auth.replace(oldPkg, newPkg)
+                                            } else {
+                                                "$auth.$newPkg"
+                                            }
+                                        }
+                                        val newAuthority = newAuthorities.joinToString(",")
+                                        map[raw] = newAuthority
+                                    }
+                                }
+                                super.attr(ns, attrName, resourceId, type, value)
+                            }
+                        }
+                    }
+                    return super.child(ns, name)
+                }
+            }
+            reader.accept(visitor)
+        } catch (e: Exception) {
+            Logger.log("  Authority extraction failed: ${e.message}")
+        }
+    }
+
     // -------------------------------------------------------------------------
-    //  DEX STRING REWRITER (method‑aware)
+    //  DEX STRING REWRITER – now with authority mapping
     // -------------------------------------------------------------------------
 
-    /**
-     * Rewrites string constants in a DEX file. If the current method is in
-     * [dangerousMethods], it replaces **every** occurrence of the old package
-     * name inside the string (using `String.replace`). Otherwise it uses a
-     * token‑aware replacement.
-     */
     private fun rewriteDexPackageStrings(
         entryName: String,
         dexBytes: ByteArray,
         oldPackageName: String,
         newPackageName: String,
-        dangerousMethods: Set<String>
+        dangerousMethods: Set<String>,
+        authorityMap: Map<String, String>
     ): Pair<ByteArray, Int> {
         val dexFile = try {
             DexBackedDexFile.fromInputStream(Opcodes.getDefault(), ByteArrayInputStream(dexBytes))
@@ -435,9 +461,6 @@ class CloneEngine(private val context: Context) {
 
         var matchCount = 0
 
-        // We need to pass the method descriptor to the instruction rewriter.
-        // We achieve this by overriding getMethodRewriter and capturing the
-        // method descriptor in a closure.
         val module = object : RewriterModule() {
             override fun getMethodRewriter(rewriters: Rewriters): Rewriter<org.jf.dexlib2.iface.Method> {
                 val defaultMethodRewriter = super.getMethodRewriter(rewriters)
@@ -446,7 +469,6 @@ class CloneEngine(private val context: Context) {
                         val descriptor = "${method.definingClass}->${method.name}${method.parameterTypes}${method.returnType}"
                         val aggressive = dangerousMethods.contains(descriptor)
 
-                        // Rewrite the method's instructions using a custom instruction rewriter
                         val origImpl = method.implementation
                         if (origImpl == null) return defaultMethodRewriter.rewrite(method)
 
@@ -456,14 +478,20 @@ class CloneEngine(private val context: Context) {
                             if (stringRef == null) return@map instruction
 
                             val original = stringRef.string
-                            val rewritten = if (aggressive) {
-                                // Unconditional replacement – but we still want to avoid
-                                // partial matches like "com.github.androidx".
-                                // We'll replace whole token segments using a helper.
-                                replacePackageToken(original, oldPackageName, newPackageName)
-                            } else {
-                                // Token‑aware replacement
-                                replacePackageToken(original, oldPackageName, newPackageName)
+                            var rewritten: String? = null
+
+                            // 1) Check authority map first (exact match)
+                            if (authorityMap.containsKey(original)) {
+                                rewritten = authorityMap[original]
+                            }
+
+                            // 2) If not an authority, apply package name rewriting
+                            if (rewritten == null) {
+                                if (aggressive) {
+                                    rewritten = replacePackageToken(original, oldPackageName, newPackageName)
+                                } else {
+                                    rewritten = replacePackageToken(original, oldPackageName, newPackageName)
+                                }
                             }
 
                             if (rewritten == null || rewritten == original) return@map instruction
@@ -477,11 +505,10 @@ class CloneEngine(private val context: Context) {
                                 is Instruction31c -> ImmutableInstruction31c(
                                     instruction.opcode, instruction.registerA, newRef
                                 )
-                                else -> instruction // shouldn't happen
+                                else -> instruction
                             }
                         }
 
-                        // Rebuild the method with new instructions
                         val newImpl = org.jf.dexlib2.immutable.ImmutableMethodImplementation(
                             origImpl.registerCount,
                             newInstructions,
@@ -514,8 +541,8 @@ class CloneEngine(private val context: Context) {
             DexPool.writeTo(tempDex.absolutePath, rewrittenDexFile)
             val patchedBytes = tempDex.readBytes()
             Logger.log(
-                "  Dex string rewrite: $entryName — patched $matchCount occurrence(s) of " +
-                    "'$oldPackageName' -> '$newPackageName' (${dexBytes.size} -> ${patchedBytes.size} bytes)"
+                "  Dex string rewrite: $entryName — patched $matchCount occurrence(s) " +
+                    "(package + authority replacements) (${dexBytes.size} -> ${patchedBytes.size} bytes)"
             )
             patchedBytes to matchCount
         } catch (e: Exception) {
@@ -526,11 +553,10 @@ class CloneEngine(private val context: Context) {
         }
     }
 
-    /**
-     * Helper that replaces the old package name with the new one, but only
-     * when it forms a whole token (i.e., surrounded by non‑identifier chars,
-     * or at start/end). Also handles slash‑separated forms.
-     */
+    // -------------------------------------------------------------------------
+    //  HELPER: replacePackageToken (unchanged)
+    // -------------------------------------------------------------------------
+
     private fun replacePackageToken(value: String, oldPkg: String, newPkg: String): String? {
         fun isIdentifierPart(ch: Char) = ch.isLetterOrDigit() || ch == '_' || ch == '$'
 
@@ -552,16 +578,14 @@ class CloneEngine(private val context: Context) {
             return null
         }
 
-        // Try dotted form
         tryReplace(oldPkg)?.let { return it }
-        // Try slashed form
         val slashedOld = oldPkg.replace('.', '/')
         val slashedNew = newPkg.replace('.', '/')
         return tryReplace(slashedOld)?.replace(slashedOld, slashedNew)
     }
 
     // -------------------------------------------------------------------------
-    //  ICON BADGING, ALIGNMENT, AXML REWRITING, SIGNING (unchanged from original)
+    //  REST OF THE CLASS (unchanged: alignment, badging, signing, AXML, install)
     // -------------------------------------------------------------------------
 
     private fun alignmentFor(entryName: String): Int {
@@ -668,7 +692,7 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  AXML REWRITING (unchanged – kept for completeness)
+    //  AXML REWRITING (unchanged – uses same rewriteAuthorities logic)
     // -------------------------------------------------------------------------
 
     private fun rewritePackageInAxml(manifestBytes: ByteArray, oldPkg: String, newPkg: String): ByteArray {
