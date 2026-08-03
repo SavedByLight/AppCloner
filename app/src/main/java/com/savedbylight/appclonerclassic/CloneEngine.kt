@@ -200,7 +200,7 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  DANGEROUS METHOD SCANNER
+    //  DANGEROUS METHOD SCANNER (fix descriptor building)
     // -------------------------------------------------------------------------
 
     private fun findDangerousMethods(apk: File, packageName: String): Set<String> {
@@ -240,7 +240,9 @@ class CloneEngine(private val context: Context) {
                         }
 
                         if (hasToggle && hasPackageString) {
-                            val descriptor = "${classDef.type}->${method.name}${method.parameterTypes}${method.returnType}"
+                            // Build the correct method descriptor
+                            val params = method.parameterTypes.joinToString("")
+                            val descriptor = "${classDef.type}->${method.name}($params)${method.returnType}"
                             dangerousMethods.add(descriptor)
                             Logger.log("Dangerous method: $descriptor (in ${entry.name})")
                         }
@@ -301,7 +303,7 @@ class CloneEngine(private val context: Context) {
         var iconsBadged = 0
         var entriesAligned = 0
         var dexStringsPatched = 0
-        var authorityMap = mapOf<String, String>() // will be filled during manifest rewrite
+        var authorityMap = mapOf<String, String>()
 
         try {
             ZipFile(apkFile).use { zipIn ->
@@ -315,7 +317,6 @@ class CloneEngine(private val context: Context) {
                         val outBytes = when {
                             entry.name == "AndroidManifest.xml" -> {
                                 manifestRewritten = true
-                                // Rewrite manifest and extract authority mapping
                                 val (newBytes, map) = rewriteManifestAndExtractAuthorities(bytes, oldPackageName, newPackageName)
                                 authorityMap = map
                                 newBytes
@@ -394,7 +395,6 @@ class CloneEngine(private val context: Context) {
             override fun child(ns: String?, name: String?): NodeVisitor {
                 val safeName = name ?: ""
                 val superVisitor = super.child(ns, safeName)
-                // Wrap the default visitor with our custom one that also collects authorities
                 return CollectingRewritingNodeVisitor(superVisitor, safeName, oldPkg, newPkg, authorityMap)
             }
 
@@ -409,7 +409,7 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  COLLECTING REWRITING NODE VISITOR (extends RewritingNodeVisitor with map collection)
+    //  COLLECTING REWRITING NODE VISITOR
     // -------------------------------------------------------------------------
 
     private class CollectingRewritingNodeVisitor(
@@ -422,9 +422,7 @@ class CloneEngine(private val context: Context) {
 
         override fun rewriteAuthorities(value: String): String {
             val rewritten = super.rewriteAuthorities(value)
-            // If the value changed, store the mapping (only for exact authority values, not for partial replacements)
             if (rewritten != value) {
-                // The original value may be comma-separated; we store each mapping individually
                 val oldParts = value.split(",").map { it.trim() }
                 val newParts = rewritten.split(",").map { it.trim() }
                 for (i in oldParts.indices) {
@@ -438,7 +436,7 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  REWRITING NODE VISITOR (unchanged except making rewriteAuthorities open)
+    //  REWRITING NODE VISITOR (open for extension)
     // -------------------------------------------------------------------------
 
     private open class RewritingNodeVisitor(
@@ -528,7 +526,7 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  DEX STRING REWRITER – now with authority map
+    //  DEX STRING REWRITER – with fixed descriptor and aggressive replacement
     // -------------------------------------------------------------------------
 
     private fun rewriteDexPackageStrings(
@@ -553,7 +551,9 @@ class CloneEngine(private val context: Context) {
                 val defaultMethodRewriter = super.getMethodRewriter(rewriters)
                 return object : Rewriter<org.jf.dexlib2.iface.Method> {
                     override fun rewrite(method: org.jf.dexlib2.iface.Method): org.jf.dexlib2.iface.Method {
-                        val descriptor = "${method.definingClass}->${method.name}${method.parameterTypes}${method.returnType}"
+                        // Build correct descriptor for comparison
+                        val params = method.parameterTypes.joinToString("")
+                        val descriptor = "${method.definingClass}->${method.name}($params)${method.returnType}"
                         val aggressive = dangerousMethods.contains(descriptor)
 
                         val origImpl = method.implementation
@@ -574,7 +574,16 @@ class CloneEngine(private val context: Context) {
 
                             // 2) If not an authority, apply package name rewriting
                             if (rewritten == null) {
-                                rewritten = replacePackageToken(original, oldPackageName, newPackageName)
+                                if (aggressive) {
+                                    // In dangerous methods, do a simple replace of all occurrences
+                                    // (this catches concatenated or partially built strings)
+                                    rewritten = original.replace(oldPackageName, newPackageName)
+                                    // But avoid breaking if the replacement creates a partial token?
+                                    // This is a trade-off; we assume the string is a component name or similar.
+                                } else {
+                                    // Safe token‑aware replacement for non‑dangerous methods
+                                    rewritten = replacePackageToken(original, oldPackageName, newPackageName)
+                                }
                             }
 
                             if (rewritten == null || rewritten == original) return@map instruction
