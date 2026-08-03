@@ -482,7 +482,7 @@ class CloneEngine(private val context: Context) {
                         }
 
                         // Rebuild the method with new instructions
-                        val newImpl = org.jf.dexlib2.immutable.instruction.ImmutableMethodImplementation(
+                        val newImpl = org.jf.dexlib2.immutable.ImmutableMethodImplementation(
                             origImpl.registerCount,
                             newInstructions,
                             origImpl.tryBlocks,
@@ -491,7 +491,7 @@ class CloneEngine(private val context: Context) {
                         return org.jf.dexlib2.immutable.ImmutableMethod(
                             method.definingClass,
                             method.name,
-                            method.parameterTypes,
+                            method.parameters,
                             method.returnType,
                             method.accessFlags,
                             method.annotations,
