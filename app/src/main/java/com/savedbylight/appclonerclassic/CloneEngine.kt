@@ -415,8 +415,8 @@ class CloneEngine(private val context: Context) {
     private class CollectingRewritingNodeVisitor(
         parent: NodeVisitor,
         tag: String?,
-        oldPkg: String,
-        newPkg: String,
+        private val oldPkg: String,
+        private val newPkg: String,
         private val authorityMap: MutableMap<String, String>
     ) : RewritingNodeVisitor(parent, tag, oldPkg, newPkg) {
 
