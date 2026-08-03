@@ -200,7 +200,7 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  DANGEROUS METHOD SCANNER (fix descriptor building)
+    //  DANGEROUS METHOD SCANNER
     // -------------------------------------------------------------------------
 
     private fun findDangerousMethods(apk: File, packageName: String): Set<String> {
@@ -240,7 +240,6 @@ class CloneEngine(private val context: Context) {
                         }
 
                         if (hasToggle && hasPackageString) {
-                            // Build the correct method descriptor
                             val params = method.parameterTypes.joinToString("")
                             val descriptor = "${classDef.type}->${method.name}($params)${method.returnType}"
                             dangerousMethods.add(descriptor)
@@ -287,7 +286,7 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  REWRITE APK CONTENTS – with manifest rewriting and authority extraction
+    //  REWRITE APK CONTENTS
     // -------------------------------------------------------------------------
 
     private fun rewriteApkContents(
@@ -378,10 +377,6 @@ class CloneEngine(private val context: Context) {
         }
     }
 
-    /**
-     * Rewrites the AndroidManifest.xml binary AXML and returns a map of old authority -> new authority
-     * that was applied during the rewrite. This map is used later to rewrite DEX string constants.
-     */
     private fun rewriteManifestAndExtractAuthorities(
         manifestBytes: ByteArray,
         oldPkg: String,
@@ -407,10 +402,6 @@ class CloneEngine(private val context: Context) {
         Logger.log("AXML: serializing rewritten manifest (collected ${authorityMap.size} authorities)")
         return writer.toByteArray() to authorityMap
     }
-
-    // -------------------------------------------------------------------------
-    //  COLLECTING REWRITING NODE VISITOR
-    // -------------------------------------------------------------------------
 
     private class CollectingRewritingNodeVisitor(
         parent: NodeVisitor,
@@ -440,10 +431,6 @@ class CloneEngine(private val context: Context) {
             return rewritten
         }
     }
-
-    // -------------------------------------------------------------------------
-    //  REWRITING NODE VISITOR (open for extension)
-    // -------------------------------------------------------------------------
 
     private open class RewritingNodeVisitor(
         parent: NodeVisitor,
@@ -534,8 +521,30 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  DEX STRING REWRITER – with fixed descriptor and aggressive replacement
+    //  DEX STRING REWRITER
     // -------------------------------------------------------------------------
+
+    private fun rewriteString(value: String, originalPackage: String, clonePackage: String): String {
+        var rewritten = when {
+            value == originalPackage ->
+                clonePackage
+
+            value.startsWith("$originalPackage.") ->
+                clonePackage + value.removePrefix(originalPackage)
+
+            value.contains(originalPackage) ->
+                value.replace(originalPackage, clonePackage)
+
+            else ->
+                value
+        }
+
+        if (rewritten.contains("ComponentName(")) {
+            rewritten = rewritten.replace(originalPackage, clonePackage)
+        }
+
+        return rewritten
+    }
 
     private fun rewriteDexPackageStrings(
         entryName: String,
@@ -559,7 +568,6 @@ class CloneEngine(private val context: Context) {
                 val defaultMethodRewriter = super.getMethodRewriter(rewriters)
                 return object : Rewriter<org.jf.dexlib2.iface.Method> {
                     override fun rewrite(method: org.jf.dexlib2.iface.Method): org.jf.dexlib2.iface.Method {
-                        // Build correct descriptor for comparison
                         val params = method.parameterTypes.joinToString("")
                         val descriptor = "${method.definingClass}->${method.name}($params)${method.returnType}"
                         val aggressive = dangerousMethods.contains(descriptor)
@@ -575,22 +583,21 @@ class CloneEngine(private val context: Context) {
                             val original = stringRef.string
                             var rewritten: String? = null
 
-                            // 1) Check authority map first (exact match)
                             if (authorityMap.containsKey(original)) {
                                 rewritten = authorityMap[original]
                             }
 
-                            // 2) If not an authority, apply package name rewriting
                             if (rewritten == null) {
                                 if (aggressive) {
-                                    // In dangerous methods, do a simple replace of all occurrences
-                                    // (this catches concatenated or partially built strings)
                                     rewritten = original.replace(oldPackageName, newPackageName)
-                                    // But avoid breaking if the replacement creates a partial token?
-                                    // This is a trade-off; we assume the string is a component name or similar.
                                 } else {
-                                    // Safe token‑aware replacement for non‑dangerous methods
-                                    rewritten = replacePackageToken(original, oldPackageName, newPackageName)
+                                    rewritten = rewriteString(original, oldPackageName, newPackageName)
+                                    if (rewritten == original) {
+                                        val tokenResult = replacePackageToken(original, oldPackageName, newPackageName)
+                                        if (tokenResult != null) {
+                                            rewritten = tokenResult
+                                        }
+                                    }
                                 }
                             }
 
@@ -653,10 +660,6 @@ class CloneEngine(private val context: Context) {
         }
     }
 
-    // -------------------------------------------------------------------------
-    //  HELPER: replacePackageToken (unchanged)
-    // -------------------------------------------------------------------------
-
     private fun replacePackageToken(value: String, oldPkg: String, newPkg: String): String? {
         fun isIdentifierPart(ch: Char) = ch.isLetterOrDigit() || ch == '_' || ch == '$'
 
@@ -683,10 +686,6 @@ class CloneEngine(private val context: Context) {
         val slashedNew = newPkg.replace('.', '/')
         return tryReplace(slashedOld)?.replace(slashedOld, slashedNew)
     }
-
-    // -------------------------------------------------------------------------
-    //  REST OF THE CLASS (unchanged: alignment, badging, signing, install)
-    // -------------------------------------------------------------------------
 
     private fun alignmentFor(entryName: String): Int {
         val lower = entryName.lowercase()
@@ -791,10 +790,6 @@ class CloneEngine(private val context: Context) {
         }
     }
 
-    // -------------------------------------------------------------------------
-    //  INSTALLATION SESSION (unchanged)
-    // -------------------------------------------------------------------------
-
     private fun installPackageSession(context: Context, packageName: String?, apkFiles: List<File>) {
         if (apkFiles.isEmpty()) {
             throw IllegalArgumentException("No APK files provided for installation.")
@@ -857,10 +852,6 @@ class CloneEngine(private val context: Context) {
             session?.close()
         }
     }
-
-    // -------------------------------------------------------------------------
-    //  COMPANION – constants & preferences
-    // -------------------------------------------------------------------------
 
     companion object {
         private val COMPONENT_TAGS = setOf("application", "activity", "activity-alias", "service", "receiver", "provider")
