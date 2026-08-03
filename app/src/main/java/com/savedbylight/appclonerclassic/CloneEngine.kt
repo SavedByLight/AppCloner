@@ -420,6 +420,12 @@ class CloneEngine(private val context: Context) {
         private val authorityMap: MutableMap<String, String>
     ) : RewritingNodeVisitor(parent, tag, oldPkg, newPkg) {
 
+        override fun child(ns: String?, name: String?): NodeVisitor {
+            val safeName = name ?: ""
+            val superVisitor = super.child(ns, safeName)
+            return CollectingRewritingNodeVisitor(superVisitor, safeName, oldPkg, newPkg, authorityMap)
+        }
+
         override fun rewriteAuthorities(value: String): String {
             val rewritten = super.rewriteAuthorities(value)
             if (rewritten != value) {
@@ -451,6 +457,7 @@ class CloneEngine(private val context: Context) {
                 val authority = raw.trim()
                 when {
                     authority.isEmpty() -> authority
+                    authority.contains(newPkg) -> authority
                     authority.contains(oldPkg) -> authority.replace(oldPkg, newPkg)
                     else -> "$authority.$newPkg"
                 }
@@ -467,10 +474,11 @@ class CloneEngine(private val context: Context) {
             }
 
             if (rawText != null) {
+                val isAuthorityAttr = name?.contains("authorit", ignoreCase = true) == true
                 val rewritten = when {
                     tag == "manifest" && name == "package" && rawText == oldPkg ->
                         newPkg
-                    tag == "provider" && name == "authorities" ->
+                    isAuthorityAttr ->
                         rewriteAuthorities(rawText)
                     tag in COMPONENT_TAGS && name == "process" && rawText.startsWith(oldPkg) ->
                         newPkg + rawText.removePrefix(oldPkg)
