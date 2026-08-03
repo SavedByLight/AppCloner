@@ -7,6 +7,7 @@ on:
       - "next-test"
       - "classic"
       - "classic-test"
+      - "classic-ex"
     tags:
       - "v*"
   workflow_dispatch:
