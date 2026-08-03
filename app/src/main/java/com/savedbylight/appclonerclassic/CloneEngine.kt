@@ -200,7 +200,7 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  DANGEROUS METHOD SCANNER (unchanged)
+    //  DANGEROUS METHOD SCANNER
     // -------------------------------------------------------------------------
 
     private fun findDangerousMethods(apk: File, packageName: String): Set<String> {
@@ -285,7 +285,7 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  REWRITE APK CONTENTS – now with authority extraction
+    //  REWRITE APK CONTENTS – with manifest rewriting and authority extraction
     // -------------------------------------------------------------------------
 
     private fun rewriteApkContents(
@@ -301,23 +301,7 @@ class CloneEngine(private val context: Context) {
         var iconsBadged = 0
         var entriesAligned = 0
         var dexStringsPatched = 0
-
-        // First, extract provider authorities from the original manifest (before any rewrite)
-        val authorityMap = mutableMapOf<String, String>()
-        try {
-            ZipFile(apkFile).use { zip ->
-                val manifestEntry = zip.getEntry("AndroidManifest.xml")
-                if (manifestEntry != null) {
-                    val manifestBytes = zip.getInputStream(manifestEntry).use { it.readBytes() }
-                    extractProviderAuthorities(manifestBytes, oldPackageName, newPackageName, authorityMap)
-                }
-            }
-        } catch (e: Exception) {
-            Logger.log("  Failed to extract authorities from manifest: ${e.message}")
-        }
-        if (authorityMap.isNotEmpty()) {
-            Logger.log("  Extracted ${authorityMap.size} provider authority mappings for DEX rewriting.")
-        }
+        var authorityMap = mapOf<String, String>() // will be filled during manifest rewrite
 
         try {
             ZipFile(apkFile).use { zipIn ->
@@ -331,8 +315,10 @@ class CloneEngine(private val context: Context) {
                         val outBytes = when {
                             entry.name == "AndroidManifest.xml" -> {
                                 manifestRewritten = true
-                                // Rewrite manifest, using the same authority mapping logic
-                                rewritePackageInAxml(bytes, oldPackageName, newPackageName)
+                                // Rewrite manifest and extract authority mapping
+                                val (newBytes, map) = rewriteManifestAndExtractAuthorities(bytes, oldPackageName, newPackageName)
+                                authorityMap = map
+                                newBytes
                             }
                             DEX_ENTRY_PATTERN.matches(entry.name) -> {
                                 val (patched, count) = rewriteDexPackageStrings(
@@ -380,7 +366,8 @@ class CloneEngine(private val context: Context) {
             Logger.log(
                 "  Rewrote zip contents: $entryCount entries, " +
                     "manifest rewritten=$manifestRewritten, icons badged=$iconsBadged, " +
-                    "aligned=$entriesAligned, dex string constants patched=$dexStringsPatched"
+                    "aligned=$entriesAligned, dex string constants patched=$dexStringsPatched" +
+                    if (authorityMap.isNotEmpty()) ", ${authorityMap.size} authority mappings extracted" else ""
             )
         } catch (e: Exception) {
             Logger.log("  FAILED rewriting zip contents: ${e.message}")
@@ -391,57 +378,157 @@ class CloneEngine(private val context: Context) {
     }
 
     /**
-     * Extracts all provider authorities from the manifest and builds a mapping
-     * from the original authority to the new authority (which will be used in
-     * both the manifest rewrite and DEX string replacement).
+     * Rewrites the AndroidManifest.xml binary AXML and returns a map of old authority -> new authority
+     * that was applied during the rewrite. This map is used later to rewrite DEX string constants.
      */
-    private fun extractProviderAuthorities(
+    private fun rewriteManifestAndExtractAuthorities(
         manifestBytes: ByteArray,
         oldPkg: String,
+        newPkg: String
+    ): Pair<ByteArray, MutableMap<String, String>> {
+        val authorityMap = mutableMapOf<String, String>()
+        val reader = AxmlReader(manifestBytes)
+        val writer = AxmlWriter()
+
+        reader.accept(object : AxmlVisitor(writer) {
+            override fun child(ns: String?, name: String?): NodeVisitor {
+                val safeName = name ?: ""
+                val superVisitor = super.child(ns, safeName)
+                // Wrap the default visitor with our custom one that also collects authorities
+                return CollectingRewritingNodeVisitor(superVisitor, safeName, oldPkg, newPkg, authorityMap)
+            }
+
+            override fun ns(prefix: String?, uri: String?, ln: Int) {
+                val safeUri = uri ?: ""
+                super.ns(prefix, safeUri, ln)
+            }
+        })
+
+        Logger.log("AXML: serializing rewritten manifest (collected ${authorityMap.size} authorities)")
+        return writer.toByteArray() to authorityMap
+    }
+
+    // -------------------------------------------------------------------------
+    //  COLLECTING REWRITING NODE VISITOR (extends RewritingNodeVisitor with map collection)
+    // -------------------------------------------------------------------------
+
+    private class CollectingRewritingNodeVisitor(
+        parent: NodeVisitor,
+        tag: String?,
+        oldPkg: String,
         newPkg: String,
-        map: MutableMap<String, String>
-    ) {
-        try {
-            val reader = AxmlReader(manifestBytes)
-            val visitor = object : AxmlVisitor() {
-                override fun child(ns: String?, name: String?): NodeVisitor {
-                    if (name == "provider") {
-                        return object : NodeVisitor() {
-                            override fun attr(ns: String?, attrName: String?, resourceId: Int, type: Int, value: Any?) {
-                                if (attrName == "authorities") {
-                                    val raw = when (value) {
-                                        is String -> value
-                                        is ValueWrapper -> value.raw
-                                        else -> null
-                                    }
-                                    if (raw != null) {
-                                        val authorities = raw.split(",").map { it.trim() }
-                                        val newAuthorities = authorities.map { auth ->
-                                            if (auth.contains(oldPkg)) {
-                                                auth.replace(oldPkg, newPkg)
-                                            } else {
-                                                "$auth.$newPkg"
-                                            }
-                                        }
-                                        val newAuthority = newAuthorities.joinToString(",")
-                                        map[raw] = newAuthority
-                                    }
-                                }
-                                super.attr(ns, attrName, resourceId, type, value)
-                            }
-                        }
+        private val authorityMap: MutableMap<String, String>
+    ) : RewritingNodeVisitor(parent, tag, oldPkg, newPkg) {
+
+        override fun rewriteAuthorities(value: String): String {
+            val rewritten = super.rewriteAuthorities(value)
+            // If the value changed, store the mapping (only for exact authority values, not for partial replacements)
+            if (rewritten != value) {
+                // The original value may be comma-separated; we store each mapping individually
+                val oldParts = value.split(",").map { it.trim() }
+                val newParts = rewritten.split(",").map { it.trim() }
+                for (i in oldParts.indices) {
+                    if (oldParts[i] != newParts[i]) {
+                        authorityMap[oldParts[i]] = newParts[i]
                     }
-                    return super.child(ns, name)
                 }
             }
-            reader.accept(visitor)
-        } catch (e: Exception) {
-            Logger.log("  Authority extraction failed: ${e.message}")
+            return rewritten
         }
     }
 
     // -------------------------------------------------------------------------
-    //  DEX STRING REWRITER – now with authority mapping
+    //  REWRITING NODE VISITOR (unchanged except making rewriteAuthorities open)
+    // -------------------------------------------------------------------------
+
+    private open class RewritingNodeVisitor(
+        parent: NodeVisitor,
+        private val tag: String?,
+        private val oldPkg: String,
+        private val newPkg: String
+    ) : NodeVisitor(parent) {
+
+        protected open fun rewriteAuthorities(value: String): String {
+            return value.split(",").joinToString(",") { raw ->
+                val authority = raw.trim()
+                when {
+                    authority.isEmpty() -> authority
+                    authority.contains(oldPkg) -> authority.replace(oldPkg, newPkg)
+                    else -> "$authority.$newPkg"
+                }
+            }
+        }
+
+        override fun attr(ns: String?, name: String?, resourceId: Int, type: Int, value: Any?) {
+            var newValue = value
+
+            val rawText: String? = when (value) {
+                is String -> value
+                is ValueWrapper -> value.raw
+                else -> null
+            }
+
+            if (rawText != null) {
+                val rewritten = when {
+                    tag == "manifest" && name == "package" && rawText == oldPkg ->
+                        newPkg
+                    tag == "provider" && name == "authorities" ->
+                        rewriteAuthorities(rawText)
+                    tag in COMPONENT_TAGS && name == "process" && rawText.startsWith(oldPkg) ->
+                        newPkg + rawText.removePrefix(oldPkg)
+                    tag in PERMISSION_DECLARATION_TAGS && name == "name" && rawText.startsWith(oldPkg) ->
+                        newPkg + rawText.removePrefix(oldPkg)
+                    tag == "uses-permission" && name == "name" && rawText.startsWith(oldPkg) ->
+                        newPkg + rawText.removePrefix(oldPkg)
+                    name in PERMISSION_REFERENCE_ATTRS && rawText.startsWith(oldPkg) ->
+                        newPkg + rawText.removePrefix(oldPkg)
+                    else -> rawText
+                }
+
+                if (rewritten != rawText) {
+                    if (value is ValueWrapper) {
+                        Logger.log("AXML: '$name' on <$tag> is a resource reference – re‑emitting as literal string '$rewritten'")
+                        super.attr(ns, name, resourceId, AxmlVisitor.TYPE_STRING, rewritten)
+                        return
+                    } else {
+                        newValue = rewritten
+                    }
+                }
+            }
+
+            if (newValue is ValueWrapper && newValue.raw == null) {
+                Logger.log("AXML: ValueWrapper with null raw text for attr '$name' on <$tag> – substituting empty string")
+                try {
+                    val rawField = ValueWrapper::class.java.getDeclaredField("raw")
+                    rawField.isAccessible = true
+                    rawField.set(newValue, "")
+                } catch (e: Exception) {
+                    Logger.log("AXML: reflection patch failed: ${e.message}")
+                }
+            }
+
+            val safeName = name ?: ""
+            var safeValue = newValue
+            if (type == AxmlVisitor.TYPE_STRING && safeValue == null) {
+                safeValue = ""
+            }
+
+            super.attr(ns, safeName, resourceId, type, safeValue)
+        }
+
+        override fun child(ns: String?, name: String?): NodeVisitor {
+            val safeName = name ?: ""
+            return RewritingNodeVisitor(super.child(ns, safeName), safeName, oldPkg, newPkg)
+        }
+
+        override fun text(lineNumber: Int, value: String?) {
+            val safeValue = value ?: ""
+            super.text(lineNumber, safeValue)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    //  DEX STRING REWRITER – now with authority map
     // -------------------------------------------------------------------------
 
     private fun rewriteDexPackageStrings(
@@ -487,11 +574,7 @@ class CloneEngine(private val context: Context) {
 
                             // 2) If not an authority, apply package name rewriting
                             if (rewritten == null) {
-                                if (aggressive) {
-                                    rewritten = replacePackageToken(original, oldPackageName, newPackageName)
-                                } else {
-                                    rewritten = replacePackageToken(original, oldPackageName, newPackageName)
-                                }
+                                rewritten = replacePackageToken(original, oldPackageName, newPackageName)
                             }
 
                             if (rewritten == null || rewritten == original) return@map instruction
@@ -585,7 +668,7 @@ class CloneEngine(private val context: Context) {
     }
 
     // -------------------------------------------------------------------------
-    //  REST OF THE CLASS (unchanged: alignment, badging, signing, AXML, install)
+    //  REST OF THE CLASS (unchanged: alignment, badging, signing, install)
     // -------------------------------------------------------------------------
 
     private fun alignmentFor(entryName: String): Int {
@@ -688,118 +771,6 @@ class CloneEngine(private val context: Context) {
         } catch (e: Exception) {
             Logger.log("  SIGNING FAILED for ${inputFile.name}: ${e.message}")
             throw e
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    //  AXML REWRITING (unchanged – uses same rewriteAuthorities logic)
-    // -------------------------------------------------------------------------
-
-    private fun rewritePackageInAxml(manifestBytes: ByteArray, oldPkg: String, newPkg: String): ByteArray {
-        Logger.log("AXML: parsing manifest (${manifestBytes.size} bytes)")
-        val reader = AxmlReader(manifestBytes)
-        val writer = AxmlWriter()
-
-        reader.accept(object : AxmlVisitor(writer) {
-            override fun child(ns: String?, name: String?): NodeVisitor {
-                val safeName = name ?: ""
-                val superVisitor = super.child(ns, safeName)
-                return RewritingNodeVisitor(superVisitor, safeName, oldPkg, newPkg)
-            }
-
-            override fun ns(prefix: String?, uri: String?, ln: Int) {
-                val safeUri = uri ?: ""
-                super.ns(prefix, safeUri, ln)
-            }
-        })
-
-        Logger.log("AXML: serializing rewritten manifest")
-        return writer.toByteArray()
-    }
-
-    private class RewritingNodeVisitor(
-        parent: NodeVisitor,
-        private val tag: String?,
-        private val oldPkg: String,
-        private val newPkg: String
-    ) : NodeVisitor(parent) {
-
-        private fun rewriteAuthorities(value: String, oldPkg: String, newPkg: String): String {
-            return value.split(",").joinToString(",") { raw ->
-                val authority = raw.trim()
-                when {
-                    authority.isEmpty() -> authority
-                    authority.contains(oldPkg) -> authority.replace(oldPkg, newPkg)
-                    else -> "$authority.$newPkg"
-                }
-            }
-        }
-
-        override fun attr(ns: String?, name: String?, resourceId: Int, type: Int, value: Any?) {
-            var newValue = value
-
-            val rawText: String? = when (value) {
-                is String -> value
-                is ValueWrapper -> value.raw
-                else -> null
-            }
-
-            if (rawText != null) {
-                val rewritten = when {
-                    tag == "manifest" && name == "package" && rawText == oldPkg ->
-                        newPkg
-                    tag == "provider" && name == "authorities" ->
-                        rewriteAuthorities(rawText, oldPkg, newPkg)
-                    tag in COMPONENT_TAGS && name == "process" && rawText.startsWith(oldPkg) ->
-                        newPkg + rawText.removePrefix(oldPkg)
-                    tag in PERMISSION_DECLARATION_TAGS && name == "name" && rawText.startsWith(oldPkg) ->
-                        newPkg + rawText.removePrefix(oldPkg)
-                    tag == "uses-permission" && name == "name" && rawText.startsWith(oldPkg) ->
-                        newPkg + rawText.removePrefix(oldPkg)
-                    name in PERMISSION_REFERENCE_ATTRS && rawText.startsWith(oldPkg) ->
-                        newPkg + rawText.removePrefix(oldPkg)
-                    else -> rawText
-                }
-
-                if (rewritten != rawText) {
-                    if (value is ValueWrapper) {
-                        Logger.log("AXML: '$name' on <$tag> is a resource reference – re‑emitting as literal string '$rewritten'")
-                        super.attr(ns, name, resourceId, AxmlVisitor.TYPE_STRING, rewritten)
-                        return
-                    } else {
-                        newValue = rewritten
-                    }
-                }
-            }
-
-            if (newValue is ValueWrapper && newValue.raw == null) {
-                Logger.log("AXML: ValueWrapper with null raw text for attr '$name' on <$tag> – substituting empty string")
-                try {
-                    val rawField = ValueWrapper::class.java.getDeclaredField("raw")
-                    rawField.isAccessible = true
-                    rawField.set(newValue, "")
-                } catch (e: Exception) {
-                    Logger.log("AXML: reflection patch failed: ${e.message}")
-                }
-            }
-
-            val safeName = name ?: ""
-            var safeValue = newValue
-            if (type == AxmlVisitor.TYPE_STRING && safeValue == null) {
-                safeValue = ""
-            }
-
-            super.attr(ns, safeName, resourceId, type, safeValue)
-        }
-
-        override fun child(ns: String?, name: String?): NodeVisitor {
-            val safeName = name ?: ""
-            return RewritingNodeVisitor(super.child(ns, safeName), safeName, oldPkg, newPkg)
-        }
-
-        override fun text(lineNumber: Int, value: String?) {
-            val safeValue = value ?: ""
-            super.text(lineNumber, safeValue)
         }
     }
 
