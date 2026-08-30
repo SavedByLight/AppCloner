@@ -14,6 +14,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.net.Uri
+import android.media.MediaScannerConnection
 import android.os.Build
 import android.provider.MediaStore
 import android.os.Environment
@@ -143,13 +144,15 @@ class CloneEngine(private val context: Context) {
     /**
      * Copies the signed clone APKs into the public Downloads folder:
      *   Download/AppCloner/<targetPackage>/
-     * so they show up in the system Files/Downloads app and are easy to
-     * pick with SAI / APKMirror Installer / adb.
      *
-     * On Android 10+ (Q) files are written via MediaStore.Downloads so
-     * scoped storage is respected. Older releases use the classic
-     * Environment.DIRECTORY_DOWNLOADS path. Falls back to the app's
-     * external files dir only if public Downloads is unavailable.
+     * Prefer a real filesystem write (so file managers, SAI, and adb can open
+     * the paths), then register with MediaStore / MediaScanner so the files
+     * appear under Downloads. MediaStore-only entries are harder to open with
+     * some package installers.
+     *
+     * IMPORTANT: multi-split clones cannot be installed by tapping a single
+     * APK — the base alone is incomplete. Use SAI, APKMirror Installer, or
+     * `adb install-multiple` on the whole folder (see README.txt inside).
      */
     private fun exportClonedApks(targetPackageName: String, apkFiles: List<File>): File {
         val relativeSubdir = "AppCloner/$targetPackageName"
@@ -158,45 +161,71 @@ class CloneEngine(private val context: Context) {
         )
         val exportDir = File(publicDownloads, relativeSubdir)
 
-        val wrotePublic = try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                exportViaMediaStore(relativeSubdir, apkFiles)
-                // Also mirror to the real filesystem path when possible so
-                // adb / file managers that still use paths can find them.
-                try {
-                    if (exportDir.exists()) exportDir.deleteRecursively()
-                    exportDir.mkdirs()
-                    apkFiles.forEachIndexed { index, src ->
-                        val name = if (index == 0) "base.apk" else "split_$index.apk"
-                        src.copyTo(File(exportDir, name), overwrite = true)
-                    }
-                    writeInstallScript(exportDir, apkFiles.size)
-                } catch (_: Exception) {
-                    // MediaStore write succeeded; path mirror is best-effort
-                }
-                true
-            } else {
-                if (exportDir.exists()) exportDir.deleteRecursively()
-                if (!exportDir.mkdirs() && !exportDir.isDirectory) {
-                    throw IOException("Cannot create $exportDir")
-                }
-                apkFiles.forEachIndexed { index, src ->
-                    val name = if (index == 0) "base.apk" else "split_$index.apk"
-                    src.copyTo(File(exportDir, name), overwrite = true)
-                }
-                writeInstallScript(exportDir, apkFiles.size)
-                true
+        // 1) Prefer direct filesystem write into public Downloads
+        val wroteFs = try {
+            if (exportDir.exists()) {
+                exportDir.listFiles()?.forEach { it.delete() }
             }
+            if (!exportDir.mkdirs() && !exportDir.isDirectory) {
+                throw IOException("Cannot create $exportDir")
+            }
+            apkFiles.forEachIndexed { index, src ->
+                val name = if (index == 0) "base.apk" else "split_$index.apk"
+                val dest = File(exportDir, name)
+                src.copyTo(dest, overwrite = true)
+                if (!dest.isFile || dest.length() == 0L) {
+                    throw IOException("Export produced empty file: ${dest.absolutePath}")
+                }
+            }
+            writeInstallHelperFiles(exportDir, apkFiles.size)
+            // Make the files visible to the system Downloads UI / file pickers
+            val paths = exportDir.listFiles()?.map { it.absolutePath }?.toTypedArray()
+            if (paths != null && paths.isNotEmpty()) {
+                MediaScannerConnection.scanFile(context, paths, null, null)
+            }
+            true
         } catch (e: Exception) {
-            Logger.log("Public Downloads export failed (${e.message}); falling back to app external files")
+            Logger.log("Direct Downloads write failed (${e.message}); trying MediaStore-only")
             false
         }
 
-        if (wrotePublic && exportDir.isDirectory) {
+        if (wroteFs) {
+            // Best-effort MediaStore index so they show under "Downloads" on Q+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    exportViaMediaStore(relativeSubdir, apkFiles)
+                } catch (e: Exception) {
+                    Logger.log("MediaStore index skipped: ${e.message}")
+                }
+            }
+            Logger.log(
+                "Export ready at ${exportDir.absolutePath} — " +
+                    if (apkFiles.size > 1) {
+                        "multi-split set: open the FOLDER in SAI/APKMirror Installer, " +
+                            "or run adb install-multiple on all APKs (do not open base.apk alone)"
+                    } else {
+                        "single APK: can be opened from Files/Downloads if Install unknown apps is allowed"
+                    }
+            )
             return exportDir
         }
 
-        // Fallback: app-private external storage (always writable)
+        // 2) MediaStore-only (no stable path) — still better than nothing
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                exportViaMediaStore(relativeSubdir, apkFiles)
+                Logger.log(
+                    "Exported via MediaStore to Downloads/$relativeSubdir " +
+                        "(no direct path). Prefer SAI to install multi-split sets."
+                )
+                // Return a synthetic path for logging; files live in MediaStore
+                return File(publicDownloads, relativeSubdir)
+            } catch (e: Exception) {
+                Logger.log("MediaStore export failed: ${e.message}")
+            }
+        }
+
+        // 3) App-private fallback
         val fallbackBase = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
             ?: context.getExternalFilesDir(null)
             ?: context.filesDir
@@ -208,17 +237,25 @@ class CloneEngine(private val context: Context) {
             val name = if (index == 0) "base.apk" else "split_$index.apk"
             src.copyTo(File(fallback, name), overwrite = true)
         }
-        writeInstallScript(fallback, apkFiles.size)
+        writeInstallHelperFiles(fallback, apkFiles.size)
+        Logger.log("Exported to app-private fallback: ${fallback.absolutePath}")
         return fallback
     }
 
     /** Insert APKs into MediaStore Downloads (Android 10+ scoped storage). */
     private fun exportViaMediaStore(relativeSubdir: String, apkFiles: List<File>) {
         val resolver = context.contentResolver
-        // Remove previous export for this package if the API allows collection deletes —
-        // best-effort; failing is fine (user may see older copies).
         apkFiles.forEachIndexed { index, src ->
             val name = if (index == 0) "base.apk" else "split_$index.apk"
+            // Delete any existing row with the same display name in this folder
+            try {
+                resolver.delete(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    "${MediaStore.Downloads.DISPLAY_NAME}=? AND ${MediaStore.Downloads.RELATIVE_PATH}=?",
+                    arrayOf(name, "${Environment.DIRECTORY_DOWNLOADS}/$relativeSubdir/")
+                )
+            } catch (_: Exception) {
+            }
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, name)
                 put(MediaStore.Downloads.MIME_TYPE, "application/vnd.android.package-archive")
@@ -226,52 +263,55 @@ class CloneEngine(private val context: Context) {
                     MediaStore.Downloads.RELATIVE_PATH,
                     "${Environment.DIRECTORY_DOWNLOADS}/$relativeSubdir"
                 )
-                put(MediaStore.Downloads.IS_PENDING, 1)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
             }
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw IOException("MediaStore insert failed for $name")
-            resolver.openOutputStream(uri)?.use { out ->
-                src.inputStream().use { input -> input.copyTo(out) }
-            } ?: throw IOException("MediaStore openOutputStream failed for $name")
-            values.clear()
-            values.put(MediaStore.Downloads.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
-        }
-        // install.sh via MediaStore as text/plain
-        val scriptBody =
-            "#!/bin/sh\n" +
-                "# Run from a PC with the device connected:\n" +
-                "#   adb install-multiple base.apk split_*.apk\n" +
-                "adb install-multiple \"\$@\" base.apk " +
-                (1 until apkFiles.size).joinToString(" ") { "split_$it.apk" } + "\n"
-        val scriptValues = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, "install.sh")
-            put(MediaStore.Downloads.MIME_TYPE, "text/x-shellscript")
-            put(
-                MediaStore.Downloads.RELATIVE_PATH,
-                "${Environment.DIRECTORY_DOWNLOADS}/$relativeSubdir"
-            )
-            put(MediaStore.Downloads.IS_PENDING, 1)
-        }
-        val scriptUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, scriptValues)
-        if (scriptUri != null) {
-            resolver.openOutputStream(scriptUri)?.use { it.write(scriptBody.toByteArray()) }
-            scriptValues.clear()
-            scriptValues.put(MediaStore.Downloads.IS_PENDING, 0)
-            resolver.update(scriptUri, scriptValues, null, null)
+            try {
+                resolver.openOutputStream(uri)?.use { out ->
+                    src.inputStream().use { input -> input.copyTo(out) }
+                } ?: throw IOException("MediaStore openOutputStream failed for $name")
+            } finally {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    values.clear()
+                    values.put(MediaStore.Downloads.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                }
+            }
         }
     }
 
-    private fun writeInstallScript(dir: File, apkCount: Int) {
+    private fun writeInstallHelperFiles(dir: File, apkCount: Int) {
+        val splitArgs = (1 until apkCount).joinToString(" ") { "split_$it.apk" }
         File(dir, "install.sh").writeText(
             "#!/bin/sh\n" +
-                "# Run from a PC with the device connected:\n" +
-                "#   adb install-multiple base.apk split_*.apk\n" +
-                "adb install-multiple \"\$@\" base.apk " +
-                (1 until apkCount).joinToString(" ") { "split_$it.apk" } + "\n"
+                "# Install this clone from a PC:\n" +
+                "#   adb install-multiple base.apk $splitArgs\n" +
+                "adb install-multiple \"\$@\" base.apk $splitArgs\n"
+        )
+        val multiNote = if (apkCount > 1) {
+            "This is a MULTI-SPLIT package (${apkCount} APKs).\n" +
+                "You CANNOT install it by tapping base.apk alone — that will fail or\n" +
+                "show \"can't open\" / incomplete app.\n\n" +
+                "Install options:\n" +
+                "  1) SAI (Split APKs Installer) or APKMirror Installer — open this folder\n" +
+                "     and select ALL .apk files together.\n" +
+                "  2) From a PC:  adb install-multiple base.apk $splitArgs\n" +
+                "  3) Use AppClonerClassic's in-app install (enable Install unknown apps,\n" +
+                "     disable Auto Blocker / Play Protect scan).\n"
+        } else {
+            "Single APK. You can open base.apk from Files if this app is allowed to\n" +
+                "install unknown apps (Settings → Special app access → Install unknown apps).\n"
+        }
+        File(dir, "README.txt").writeText(
+            "AppClonerClassic export\n" +
+                "======================\n\n" +
+                multiNote +
+                "\nFolder: ${dir.absolutePath}\n"
         )
     }
-
 
     /**
      * Entry point called by MainActivity passing a List<File> of APKs.
