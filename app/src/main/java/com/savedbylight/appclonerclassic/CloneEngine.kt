@@ -179,8 +179,46 @@ class CloneEngine(private val context: Context) {
 
     /**
      * Overload accepting target package name explicitly.
+     *
+     * Before opening a PackageInstaller session we verify that this app is
+     * allowed to install unknown packages (Settings → Apps → Special access
+     * → Install unknown apps). Without that permission the system confirmation
+     * dialog often ends with INSTALL_FAILED_ABORTED / "User rejected
+     * permissions" even when the user never tapped Cancel.
      */
     fun launchInstall(targetPackageName: String?, apkFiles: List<File>) {
+        // Ensure "Install unknown apps" is granted for this package (API 26+).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (!context.packageManager.canRequestPackageInstalls()) {
+                Logger.log(
+                    "INSTALL BLOCKED: AppClonerClassic is not allowed to install unknown apps. " +
+                        "Opening system settings so you can enable it for this app…"
+                )
+                try {
+                    val settingsIntent = Intent(
+                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:${context.packageName}")
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(settingsIntent)
+                } catch (e: Exception) {
+                    // Fallback: open the generic unknown-sources screen
+                    try {
+                        val fallback = Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(fallback)
+                    } catch (e2: Exception) {
+                        Logger.log("Could not open Install-unknown-apps settings: ${e2.message}")
+                    }
+                }
+                Logger.log(
+                    "After enabling \"Install unknown apps\" for AppClonerClassic, tap the app " +
+                        "again to retry the install. The signed APKs are already exported under " +
+                        "clone_debug_export/ if you prefer adb / SAI."
+                )
+                return
+            }
+        }
+
         val installerPackage = Companion.getPreferredInstallerPackage(context)
         if (installerPackage != null && apkFiles.size == 1) {
             Logger.log("Routing install through third-party installer: $installerPackage")

@@ -84,7 +84,18 @@ class LogActivity : AppCompatActivity() {
 
                 PackageInstaller.STATUS_FAILURE_ABORTED -> {
                     Logger.log("INSTALL ABORTED: $message")
-                    Logger.log("This is commonly an OEM package installer (Samsung Auto Blocker, Play Protect scan, Knox policy, etc.) silently rejecting a multi-split APK session from a non-Play-Store installer — not necessarily an actual user cancel. Check Settings > Security > Auto Blocker and Play Protect's \"scan before install\" toggle.")
+                    val msg = (message ?: "").lowercase()
+                    if ("user rejected" in msg || "rejected permissions" in msg) {
+                        Logger.log(
+                            "Rejected permissions / confirmation. Enable Install unknown apps for " +
+                                "AppClonerClassic and disable Auto Blocker / Play Protect scan if present."
+                        )
+                    } else {
+                        Logger.log(
+                            "This is commonly an OEM package installer (Samsung Auto Blocker, Play Protect, " +
+                                "Knox) rejecting a multi-split session. Check those settings."
+                        )
+                    }
                 }
 
                 PackageInstaller.STATUS_FAILURE_BLOCKED -> {

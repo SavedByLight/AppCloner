@@ -62,12 +62,35 @@ class InstallResultReceiver : BroadcastReceiver() {
 
             PackageInstaller.STATUS_FAILURE_ABORTED -> {
                 Logger.log("INSTALL ABORTED: $message")
-                Logger.log(
-                    "This is commonly an OEM package installer (Samsung Auto Blocker, Play Protect scan, " +
-                        "Knox policy, etc.) silently rejecting a multi-split APK session from a non-Play-Store " +
-                        "installer — not necessarily an actual user cancel. Check Settings > Security > " +
-                        "Auto Blocker and Play Protect's \"scan before install\" toggle."
-                )
+                val msg = (message ?: "").lowercase()
+                when {
+                    "user rejected" in msg || "rejected permissions" in msg -> {
+                        Logger.log(
+                            "The system reported that the install was rejected (permissions / confirmation). " +
+                                "Common causes: (1) you tapped Cancel on the install dialog, " +
+                                "(2) AppClonerClassic does not have \"Install unknown apps\" enabled " +
+                                "(Settings → Apps → Special app access → Install unknown apps), " +
+                                "(3) an OEM policy (Samsung Auto Blocker, Play Protect, Knox) blocked it."
+                        )
+                        Logger.log(
+                            "Fix: enable Install unknown apps for AppClonerClassic, turn off Auto Blocker / " +
+                                "Play Protect scan temporarily, then clone again — or use the manual fallback below."
+                        )
+                    }
+                    "verification" in msg -> {
+                        Logger.log(
+                            "OEM package verifier (Samsung Auto Blocker, Play Protect, Knox, etc.) rejected " +
+                                "a multi-split session from a non-Play-Store installer. Check Settings > Security > " +
+                                "Auto Blocker and Play Protect's \"scan before install\" toggle."
+                        )
+                    }
+                    else -> {
+                        Logger.log(
+                            "Install was aborted. If you did not cancel, check Install unknown apps permission " +
+                                "and OEM blockers (Auto Blocker / Play Protect)."
+                        )
+                    }
+                }
                 logManualFallbackHint(targetPkg)
             }
 
