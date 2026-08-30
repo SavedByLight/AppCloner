@@ -163,9 +163,9 @@ class LogActivity : AppCompatActivity() {
     private fun logManualFallback(targetPkg: String?) {
         if (targetPkg.isNullOrEmpty()) return
         Logger.log(
-            "Manual install fallback: Android/data/com.savedbylight.appclonerclassic/files/" +
-                "clone_debug_export/$targetPkg/ — adb install-multiple base.apk split_*.apk " +
-                "or SAI / APKMirror Installer."
+            "Manual install fallback: Download/AppCloner/$targetPkg/ " +
+                "(or /storage/emulated/0/Download/AppCloner/$targetPkg/) — " +
+                "adb install-multiple base.apk split_*.apk or SAI / APKMirror Installer."
         )
     }
 

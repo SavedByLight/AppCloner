@@ -141,8 +141,9 @@ class InstallResultReceiver : BroadcastReceiver() {
         if (targetPkg.isNullOrEmpty()) return
         Logger.log(
             "Manual install fallback: the signed APKs were exported to " +
-                "Android/data/${contextPackage()}/files/clone_debug_export/$targetPkg/ " +
-                "— use \"adb install-multiple base.apk split_*.apk\" or a split-capable installer (SAI, APKMirror Installer)."
+                "Download/AppCloner/$targetPkg/ " +
+                "(or /storage/emulated/0/Download/AppCloner/$targetPkg/) — " +
+                "use \"adb install-multiple base.apk split_*.apk\" or SAI / APKMirror Installer."
         )
     }
 
