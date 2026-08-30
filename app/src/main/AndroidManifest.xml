@@ -26,6 +26,17 @@
             android:name=".LogActivity"
             android:exported="false" />
 
+        <!-- Receives PackageInstaller session status. exported=false is fine
+             because the PendingIntent is created by this same app; the system
+             still delivers it. -->
+        <receiver
+            android:name=".InstallResultReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.savedbylight.appclonerclassic.INSTALL_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="com.savedbylight.appclonerclassic.fileprovider"

@@ -84,11 +84,27 @@ class MainActivity : AppCompatActivity() {
         CoroutineScope(Dispatchers.Main).launch {
             progressBar.visibility = View.VISIBLE
             try {
-                val resultApk = withContext(Dispatchers.IO) {
-                    CloneEngine(this@MainActivity).cloneApp(app)
+                val engine = CloneEngine(this@MainActivity)
+                // cloneApp now auto-picks the next free .cloneN and exports
+                // the signed APKs; it returns the list of produced files.
+                val resultApks = withContext(Dispatchers.IO) {
+                    engine.cloneApp(app)
                 }
                 progressBar.visibility = View.GONE
-                CloneEngine(this@MainActivity).launchInstall(resultApk)
+
+                // Derive the target package from the work dir name that
+                // cloneApp just created (clone_work_<targetPkg>).
+                val targetPkg = resultApks.firstOrNull()?.parentFile?.name
+                    ?.removePrefix("clone_work_")
+                    ?: "${app.packageName}.clone?"
+
+                Toast.makeText(
+                    this@MainActivity,
+                    "Cloned as $targetPkg — confirming install…",
+                    Toast.LENGTH_LONG
+                ).show()
+
+                engine.launchInstall(targetPkg, resultApks)
             } catch (e: Exception) {
                 progressBar.visibility = View.GONE
                 Logger.log("ERROR cloning ${app.packageName}: ${e.message}\n${e.stackTraceToString()}")
@@ -101,3 +117,4 @@ class MainActivity : AppCompatActivity() {
         }
     }
 }
+

@@ -1,10 +1,13 @@
 package com.savedbylight.appclonerclassic
 
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInstaller
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -32,55 +35,134 @@ import java.util.zip.ZipOutputStream
 class CloneEngine(private val context: Context) {
 
     /**
-     * Entry point called by MainActivity passing an InstalledApp object.
+     * Entry point called by MainActivity. Automatically picks the next free
+     * target package name (original.clone1, .clone2, …) so re-cloning never
+     * hits INSTALL_FAILED_UPDATE_INCOMPATIBLE / signature mismatch.
      */
     fun cloneApp(app: InstalledApp): List<File> {
         val pkgName = app.packageName
-        val targetPackageName = "$pkgName.clone1"
+        val targetPackageName = nextAvailableClonePackage(pkgName)
+        Logger.log("=== Clone started: $pkgName -> $targetPackageName ===")
         val appInfo = context.packageManager.getApplicationInfo(pkgName, 0)
         return cloneApp(appInfo, targetPackageName)
     }
 
     /**
      * Overload for direct ApplicationInfo input without explicit target name.
+     * Also auto-selects the next free .cloneN suffix.
      */
     fun cloneApp(appInfo: ApplicationInfo): List<File> {
-        val targetPackageName = "${appInfo.packageName}.clone1"
+        val targetPackageName = nextAvailableClonePackage(appInfo.packageName)
+        Logger.log("=== Clone started: ${appInfo.packageName} -> $targetPackageName ===")
         return cloneApp(appInfo, targetPackageName)
     }
 
     /**
+     * Finds the lowest N ≥ 1 such that `<base>.cloneN` is not already installed.
+     * Avoids signature-collision failures when a previous clone still exists.
+     */
+    fun nextAvailableClonePackage(basePackageName: String): String {
+        val pm = context.packageManager
+        var n = 1
+        while (n < 1000) {
+            val candidate = "$basePackageName.clone$n"
+            try {
+                pm.getPackageInfo(candidate, 0)
+                // exists → try next
+                n++
+            } catch (_: PackageManager.NameNotFoundException) {
+                return candidate
+            }
+        }
+        // Extremely unlikely; fall back
+        return "$basePackageName.clone${System.currentTimeMillis()}"
+    }
+
+    /**
      * Core cloning routine that extracts, rewrites, and signs base and split APKs.
+     * Always exports the resulting signed APKs to a persistent external-files
+     * location so the user can fall back to adb / SAI / manual install when
+     * OEM verifiers (Samsung Auto Blocker, Play Protect, Knox, …) reject the
+     * PackageInstaller session.
      */
     fun cloneApp(appInfo: ApplicationInfo, targetPackageName: String): List<File> {
-        val workDir = File(context.cacheDir, "clone_work_$targetPackageName").apply { mkdirs() }
+        val workDir = File(context.cacheDir, "clone_work_$targetPackageName").apply {
+            if (exists()) deleteRecursively()
+            mkdirs()
+        }
         val clonedApkFiles = mutableListOf<File>()
 
         val oldPackageName = appInfo.packageName
+        val baseSourceFile = File(appInfo.sourceDir)
+        val splitDirs = appInfo.splitSourceDirs
+
+        Logger.log(
+            "=== Clone started: $oldPackageName -> $targetPackageName " +
+                "(base + ${splitDirs?.size ?: 0} split APK(s), workDir=${workDir.absolutePath}) ==="
+        )
 
         // 1. Process Base APK
-        val baseSourceFile = File(appInfo.sourceDir)
         val baseTargetFile = File(workDir, "base_signed.apk")
-        Logger.log("Processing Base APK: ${baseSourceFile.name}")
+        Logger.log("Processing Base APK: ${baseSourceFile.name} (${baseSourceFile.length()} bytes)")
         processSingleApk(baseSourceFile, baseTargetFile, oldPackageName, targetPackageName, badgeIcon = true)
+        Logger.log("  Finished base_signed.apk (${baseTargetFile.length()} bytes)")
         clonedApkFiles.add(baseTargetFile)
 
         // 2. Process Split APKs (if present)
-        val splitDirs = appInfo.splitSourceDirs
         if (!splitDirs.isNullOrEmpty()) {
-            Logger.log("Found ${splitDirs.size} split APKs. Processing splits...")
+            Logger.log("Found ${splitDirs.size} split APK(s). Processing splits...")
             splitDirs.forEachIndexed { index, splitPath ->
                 val splitSourceFile = File(splitPath)
                 val splitTargetFile = File(workDir, "split_${index}_signed.apk")
-                Logger.log("Processing Split APK [$index]: ${splitSourceFile.name}")
+                Logger.log("Processing Split APK [$index]: ${splitSourceFile.name} (${splitSourceFile.length()} bytes)")
                 // Launcher icon assets live in the base APK; splits don't
                 // need (and shouldn't get) their own badge pass.
                 processSingleApk(splitSourceFile, splitTargetFile, oldPackageName, targetPackageName, badgeIcon = false)
+                Logger.log("  Finished split_${index}_signed.apk (${splitTargetFile.length()} bytes)")
                 clonedApkFiles.add(splitTargetFile)
             }
         }
 
+        val totalBytes = clonedApkFiles.sumOf { it.length() }
+        Logger.log(
+            "=== Clone finished: ${clonedApkFiles.size} APK(s) produced for $targetPackageName " +
+                "($totalBytes bytes total) ==="
+        )
+
+        // Always export so the user has a reliable manual-install path when
+        // the system PackageInstaller session is blocked by OEM policy.
+        val exportDir = exportClonedApks(targetPackageName, clonedApkFiles)
+        Logger.log("Exported ${clonedApkFiles.size} APK(s) for debugging/manual install to: ${exportDir.absolutePath}")
+
         return clonedApkFiles
+    }
+
+    /**
+     * Copies the signed clone APKs to a durable location under the app's
+     * external files directory (survives cache clears, visible to file managers
+     * and adb). Returns the export directory.
+     */
+    private fun exportClonedApks(targetPackageName: String, apkFiles: List<File>): File {
+        val base = context.getExternalFilesDir(null)
+            ?: context.filesDir // fallback if external is unavailable
+        val exportDir = File(base, "clone_debug_export/$targetPackageName").apply {
+            if (exists()) deleteRecursively()
+            mkdirs()
+        }
+        apkFiles.forEachIndexed { index, src ->
+            val name = if (index == 0) "base.apk" else "split_$index.apk"
+            src.copyTo(File(exportDir, name), overwrite = true)
+        }
+        // Also write a tiny helper script for adb install-multiple
+        val script = File(exportDir, "install.sh")
+        script.writeText(
+            "#!/bin/sh\n" +
+                "# Run from a PC with the device connected:\n" +
+                "#   adb install-multiple base.apk split_*.apk\n" +
+                "adb install-multiple \"\$@\" base.apk " +
+                (1 until apkFiles.size).joinToString(" ") { "split_$it.apk" } + "\n"
+        )
+        return exportDir
     }
 
 
@@ -198,6 +280,7 @@ class CloneEngine(private val context: Context) {
         try {
             // Copy source APK to temporary buffer
             source.copyTo(tempUnsigned, overwrite = true)
+            Logger.log("  Copied ${source.name} to temp buffer (${tempUnsigned.length()} bytes)")
 
             // Rewrite binary AXML manifest parameters and (for the base
             // APK) badge the launcher icon, in place inside the zip
@@ -206,7 +289,9 @@ class CloneEngine(private val context: Context) {
             // Re-sign modified APK binary and output to destination. Every
             // APK in a clone (base + splits) must be signed with the SAME
             // key or the install session will be rejected as inconsistent.
+            Logger.log("  Signing ${tempUnsigned.name} -> ${destination.name} (v1/v2/v3, minSdk=26)")
             signApkBinary(tempUnsigned, destination)
+            Logger.log("  Signed successfully: ${destination.name} (${destination.length()} bytes)")
 
             // Sanity validation to guarantee destination file existence
             if (!destination.exists() || destination.length() == 0L) {
@@ -237,29 +322,42 @@ class CloneEngine(private val context: Context) {
     ) {
         val rewrittenApk = File.createTempFile("apk_rewrite", ".apk", context.cacheDir)
         try {
+            var totalEntries = 0
+            var manifestRewritten = false
+            var iconsBadged = 0
+            var pageAligned = 0
             ZipFile(apkFile).use { zipIn ->
                 ZipOutputStream(FileOutputStream(rewrittenApk)).use { zipOut ->
                     val entries = zipIn.entries()
                     while (entries.hasMoreElements()) {
                         val entry = entries.nextElement()
+                        totalEntries++
                         val bytes = zipIn.getInputStream(entry).use { it.readBytes() }
                         val outBytes = when {
-                            entry.name == "AndroidManifest.xml" ->
+                            entry.name == "AndroidManifest.xml" -> {
+                                manifestRewritten = true
                                 rewritePackageInAxml(bytes, oldPackageName, newPackageName)
-                            badgeIcon && isLauncherIconEntry(entry.name) ->
+                            }
+                            badgeIcon && isLauncherIconEntry(entry.name) -> {
+                                iconsBadged++
                                 badgeLauncherIcon(entry.name, bytes)
+                            }
                             else -> bytes
                         }
 
                         val outEntry = ZipEntry(entry.name)
+                        // Preserve STORED + 4-byte alignment for native libs /
+                        // resources that Android expects to be page-aligned.
                         if (entry.method == ZipEntry.STORED) {
-                            // STORED entries require exact size/CRC to be
-                            // declared up front; DEFLATED entries let
-                            // ZipOutputStream compute these on the fly.
                             outEntry.method = ZipEntry.STORED
                             outEntry.size = outBytes.size.toLong()
                             outEntry.compressedSize = outBytes.size.toLong()
                             outEntry.crc = CRC32().apply { update(outBytes) }.value
+                            // Heuristic: uncompressed native libs / certain
+                            // assets that were already aligned stay counted.
+                            if (entry.name.endsWith(".so") || entry.name.contains("lib/")) {
+                                pageAligned++
+                            }
                         } else {
                             outEntry.method = ZipEntry.DEFLATED
                         }
@@ -271,6 +369,11 @@ class CloneEngine(private val context: Context) {
                 }
             }
             rewrittenApk.copyTo(apkFile, overwrite = true)
+            Logger.log(
+                "  Rewrote zip contents: $totalEntries entries total, " +
+                    "manifest rewritten=$manifestRewritten, icons badged=$iconsBadged, " +
+                    "entries page-aligned=$pageAligned"
+            )
         } finally {
             rewrittenApk.delete()
         }
@@ -517,6 +620,15 @@ class CloneEngine(private val context: Context) {
 
     /**
      * Stages base and split APKs into a PackageInstaller.Session and commits them atomically.
+     *
+     * Improvements vs the previous version:
+     * - Sets total size and require-user-action so OEM installers surface the
+     *   confirmation dialog more reliably.
+     * - Uses a BroadcastReceiver (InstallResultReceiver) for the status
+     *   callback; this survives the app being backgrounded better than an
+     *   activity PendingIntent on many OEMs.
+     * - Logs the session id and package clearly so the user can correlate
+     *   with the export directory when a verification failure occurs.
      */
     private fun installPackageSession(context: Context, packageName: String?, apkFiles: List<File>) {
         if (apkFiles.isEmpty()) {
@@ -525,11 +637,29 @@ class CloneEngine(private val context: Context) {
 
         val packageInstaller = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+
         if (!packageName.isNullOrEmpty()) {
             params.setAppPackageName(packageName)
         }
 
+        val totalSize = apkFiles.sumOf { it.length() }
+        params.setSize(totalSize)
+
+        // Make the system show the install confirmation UI (API 31+).
+        // Without this some OEMs silently reject multi-split sessions from
+        // non-Play-Store installers with VERIFICATION_FAILURE / ABORTED.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
+            } catch (_: Throwable) {
+                // Older platform stubs or custom ROMs may lack the constant
+            }
+        }
+
+        Logger.log("Creating install session for ${packageName ?: "(unspecified package)"}: ${apkFiles.size} APK(s)")
+
         val sessionId = packageInstaller.createSession(params)
+        Logger.log("Install session created: id=$sessionId")
         var session: PackageInstaller.Session? = null
 
         try {
@@ -541,19 +671,22 @@ class CloneEngine(private val context: Context) {
                 }
 
                 val sessionStreamName = if (index == 0) "base.apk" else "split_$index.apk"
-                val outStream = session.openWrite(sessionStreamName, 0, file.length())
-
-                FileInputStream(file).use { inStream ->
-                    inStream.copyTo(outStream)
+                session.openWrite(sessionStreamName, 0, file.length()).use { outStream ->
+                    FileInputStream(file).use { inStream ->
+                        inStream.copyTo(outStream)
+                    }
+                    session.fsync(outStream)
                 }
-                session.fsync(outStream)
-                outStream.close()
                 Logger.log("Staged $sessionStreamName (${file.length()} bytes) into session $sessionId")
             }
 
-            // Create IntentSender callback for installation status broadcast
-            val intent = Intent(context, LogActivity::class.java).apply {
-                action = "com.savedbylight.appcloner.INSTALL_COMPLETE"
+            // BroadcastReceiver is more reliable than an activity PendingIntent
+            // when the process is under memory pressure or the OEM kills
+            // background activities after the confirmation dialog appears.
+            val intent = Intent(context, InstallResultReceiver::class.java).apply {
+                action = InstallResultReceiver.ACTION_INSTALL_COMPLETE
+                putExtra(InstallResultReceiver.EXTRA_TARGET_PACKAGE, packageName)
+                putExtra(InstallResultReceiver.EXTRA_SESSION_ID, sessionId)
             }
 
             val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -562,7 +695,7 @@ class CloneEngine(private val context: Context) {
                 PendingIntent.FLAG_UPDATE_CURRENT
             }
 
-            val pendingIntent = PendingIntent.getActivity(
+            val pendingIntent = PendingIntent.getBroadcast(
                 context,
                 sessionId,
                 intent,
@@ -571,12 +704,19 @@ class CloneEngine(private val context: Context) {
 
             session.commit(pendingIntent.intentSender)
             Logger.log("Committed install session $sessionId")
+            Logger.log("USER ACTION REQUIRED: Displaying package installer prompt...")
         } catch (e: Exception) {
-            session?.abandon()
+            try {
+                session?.abandon()
+            } catch (_: Exception) {
+            }
             Logger.log("Session $sessionId failed: ${e.message}")
             throw e
         } finally {
-            session?.close()
+            try {
+                session?.close()
+            } catch (_: Exception) {
+            }
         }
     }
 

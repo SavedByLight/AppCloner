@@ -6,4 +6,6 @@
          grant a content:// URI for those files too (needed for the
          ACTION_VIEW third-party-installer handoff). -->
     <cache-path name="clone_work" path="." />
+    <!-- Durable export location used for manual/adb fallback installs. -->
+    <external-files-path name="clone_exports" path="clone_debug_export/" />
 </paths>
