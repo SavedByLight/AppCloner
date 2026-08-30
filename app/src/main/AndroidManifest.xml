@@ -24,7 +24,9 @@
 
         <activity
             android:name=".LogActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true" />
 
         <!-- Receives PackageInstaller session status. exported=false is fine
              because the PendingIntent is created by this same app; the system

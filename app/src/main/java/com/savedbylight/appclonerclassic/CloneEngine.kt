@@ -683,12 +683,25 @@ class CloneEngine(private val context: Context) {
         val totalSize = apkFiles.sumOf { it.length() }
         params.setSize(totalSize)
 
-        // Make the system show the install confirmation UI (API 31+).
-        // Without this some OEMs silently reject multi-split sessions from
-        // non-Play-Store installers with VERIFICATION_FAILURE / ABORTED.
+        // Prefer NOT_REQUIRED when we already have Install-unknown-apps
+        // permission — some OEMs auto-dismiss REQUIRED dialogs in ~1s with
+        // "User rejected permissions". Fall back to REQUIRED otherwise.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             try {
-                params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
+                val hasInstallPerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.packageManager.canRequestPackageInstalls()
+                } else true
+                val action = if (hasInstallPerm) {
+                    PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED
+                } else {
+                    PackageInstaller.SessionParams.USER_ACTION_REQUIRED
+                }
+                params.setRequireUserAction(action)
+                Logger.log(
+                    "Session requireUserAction=" +
+                        if (hasInstallPerm) "NOT_REQUIRED (install-unknown-apps granted)"
+                        else "REQUIRED"
+                )
             } catch (_: Throwable) {
                 // Older platform stubs or custom ROMs may lack the constant
             }
@@ -718,13 +731,16 @@ class CloneEngine(private val context: Context) {
                 Logger.log("Staged $sessionStreamName (${file.length()} bytes) into session $sessionId")
             }
 
-            // BroadcastReceiver is more reliable than an activity PendingIntent
-            // when the process is under memory pressure or the OEM kills
-            // background activities after the confirmation dialog appears.
-            val intent = Intent(context, InstallResultReceiver::class.java).apply {
-                action = InstallResultReceiver.ACTION_INSTALL_COMPLETE
-                putExtra(InstallResultReceiver.EXTRA_TARGET_PACKAGE, packageName)
-                putExtra(InstallResultReceiver.EXTRA_SESSION_ID, sessionId)
+            // Use an Activity PendingIntent (LogActivity), not a BroadcastReceiver.
+            // Starting the system confirmation UI from a background receiver is
+            // blocked or auto-dismissed on many OEM builds (Samsung etc.), which
+            // surfaces as INSTALL_FAILED_ABORTED / "User rejected permissions"
+            // within ~1 second. An Activity context can launch the confirm intent.
+            val intent = Intent(context, LogActivity::class.java).apply {
+                action = "com.savedbylight.appclonerclassic.INSTALL_COMPLETE"
+                putExtra("extra_target_package", packageName)
+                putExtra("extra_session_id", sessionId)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             }
 
             val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -733,7 +749,7 @@ class CloneEngine(private val context: Context) {
                 PendingIntent.FLAG_UPDATE_CURRENT
             }
 
-            val pendingIntent = PendingIntent.getBroadcast(
+            val pendingIntent = PendingIntent.getActivity(
                 context,
                 sessionId,
                 intent,
