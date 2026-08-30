@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: 
+    branches:
       - "next"
       - "next-test"
       - "classic"
@@ -11,10 +11,15 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: "Tag/version to publish as a release (e.g. v1.0.0). Leave blank to skip creating a release."
+      version:
+        description: "Release version (e.g. 1.2.0 or v1.2.0). Used as the Git tag and in the release title AppCloner <version>. Leave blank to only build an artifact (no release)."
         required: false
         type: string
+      prerelease:
+        description: "Mark the GitHub Release as a pre-release"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -26,6 +31,9 @@ jobs:
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
+        with:
+          # Full history required so we can list every commit since the last tag
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -53,6 +61,87 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Resolve version & release metadata
+        id: meta
+        run: |
+          set -euo pipefail
+
+          # --- Determine version / tag name ---
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            RAW="${{ inputs.version }}"
+            # Accept "1.2.0" or "v1.2.0"
+            if [[ "$RAW" == v* ]]; then
+              TAG="$RAW"
+              VERSION="${RAW#v}"
+            else
+              VERSION="$RAW"
+              TAG="v$RAW"
+            fi
+            CREATE_RELEASE=true
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#v}"
+            CREATE_RELEASE=true
+          else
+            # Push to a branch: build only, no release
+            TAG=""
+            VERSION="0.0.0-ci"
+            CREATE_RELEASE=false
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "create_release=$CREATE_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "Resolved VERSION=$VERSION  TAG=$TAG  CREATE_RELEASE=$CREATE_RELEASE"
+
+          # --- Previous tag (for changelog) ---
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          # If we are already on the tag we are about to (re)publish, go one further back
+          if [ -n "$TAG" ] && [ "$PREV_TAG" = "$TAG" ]; then
+            PREV_TAG=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          fi
+          echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+          echo "Previous tag for changelog: ${PREV_TAG:-'(none)'}"
+
+          # --- Build changelog: all commits since previous tag ---
+          {
+            echo "## What's changed"
+            echo ""
+            if [ -n "$PREV_TAG" ]; then
+              echo "Commits since \`$PREV_TAG\`:"
+              echo ""
+              git log "${PREV_TAG}..HEAD" --pretty=format:'- %s (%h)' --no-merges
+            else
+              echo "Full history (no previous release tag found):"
+              echo ""
+              git log --pretty=format:'- %s (%h)' --no-merges -n 100
+            fi
+            echo ""
+            echo ""
+            echo "---"
+            echo "_Built from commit \`${{ github.sha }}\` on \`${{ github.ref_name }}\`_"
+          } > release_notes.md
+
+          echo "----- release_notes.md -----"
+          cat release_notes.md
+
+      - name: Inject versionName into build.gradle (manual / tag builds)
+        if: steps.meta.outputs.create_release == 'true'
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          # Bump versionName so the APK reports the release version
+          sed -i -E "s/versionName \".*\"/versionName \"${VERSION} Classic\"/" app/build.gradle
+          # Derive a numeric versionCode from major.minor.patch when possible
+          if [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+            CODE=$(( ${BASH_REMATCH[1]} * 10000 + ${BASH_REMATCH[2]} * 100 + ${BASH_REMATCH[3]} ))
+            sed -i -E "s/versionCode [0-9]+/versionCode ${CODE}/" app/build.gradle
+            echo "Set versionName=${VERSION} Classic  versionCode=${CODE}"
+          else
+            echo "Set versionName=${VERSION} Classic (versionCode unchanged)"
+          fi
+          grep -E "version(Code|Name)" app/build.gradle
+
       - name: Build Release APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -67,10 +156,15 @@ jobs:
           path: app/build/outputs/apk/release/app-release.apk
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+        if: steps.meta.outputs.create_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: AppCloner ${{ steps.meta.outputs.version }}
+          body_path: release_notes.md
           files: app/build/outputs/apk/release/app-release.apk
+          draft: false
+          prerelease: ${{ inputs.prerelease || false }}
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
