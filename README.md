@@ -55,6 +55,11 @@ using for TWRP/LineageOS Soong builds.
   to run or will misbehave. This isn't fixable at the manifest level — it'd
   require patching the actual DEX/native code, which is a different
   (and much murkier) project.
+- **Google / Facebook login usually fails on clones.** Those providers bind
+  OAuth to the original package name + signing certificate. A re-signed
+  clone has neither, so social login is rejected. Prefer phone/email login
+  when the app offers it. White screens on TikTok login are often the same
+  class of runtime identity check — not a missing manifest attribute.
 - **Shared prefs / SQL storage collisions are avoided for free** — since the
   cloned app gets a distinct package name, Android gives it its own
   `/data/data/<pkg>/` automatically. No extra work needed there.

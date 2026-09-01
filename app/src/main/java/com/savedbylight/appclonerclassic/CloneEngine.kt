@@ -690,9 +690,14 @@ class CloneEngine(private val context: Context) {
      *     do not contain the package name, e.g. TikTok's SHARE_PROVIDER_…)
      *   - <application/activity/activity-alias/service/receiver/provider
      *     android:name="...">                              — prefix match (FQCN)
-     *   - android:process="..." on any component            — prefix match
+     *   - android:process / taskAffinity / targetActivity /
+     *     parentActivityName on components                  — prefix match
      *  Everything else (meta-data keys/values, intent-filter data, etc.) is
-     *  left untouched, even if it happens to contain the package substring. */
+     *  left untouched, even if it happens to contain the package substring.
+     *
+     *  Incomplete rewrites (especially activity-alias targetActivity) leave
+     *  login/splash activities pointing at non-existent components under the
+     *  old package name, which surfaces as a blank white screen on launch. */
     private class RewritingNodeVisitor(
         parent: NodeVisitor,
         private val tag: String?,
@@ -714,9 +719,26 @@ class CloneEngine(private val context: Context) {
                     // Always rewrite every authority to guarantee uniqueness.
                     tag == "provider" && name == "authorities" ->
                         CloneEngine.rewriteAuthorities(value, oldPkg, newPkg)
+                    // Component class names (FQCN). Relative names starting
+                    // with '.' are resolved against the manifest package by
+                    // the system and must NOT be rewritten.
                     tag in COMPONENT_TAGS && name == "name" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
+                    // Process name — must stay unique per clone.
                     tag in COMPONENT_TAGS && name == "process" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+                    // activity-alias targetActivity points at the real
+                    // activity. If left pointing at oldPkg.xxx the alias
+                    // resolves to nothing → blank white screen on launch
+                    // (common on TikTok splash/login aliases).
+                    tag == "activity-alias" && name == "targetActivity" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+                    // taskAffinity groups activities into tasks; keep clones
+                    // from sharing the original app's task stack.
+                    name == "taskAffinity" && value.startsWith(oldPkg) ->
+                        newPkg + value.removePrefix(oldPkg)
+                    // parentActivityName for up-navigation.
+                    name == "parentActivityName" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
                     // Custom permission declarations. Permission names are
                     // unique per-device, not per-package, so leaving these
