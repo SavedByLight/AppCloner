@@ -8,7 +8,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
 class AppListAdapter(
-    private val apps: List<InstalledApp>,
+    private var apps: List<InstalledApp>,
     private val onClick: (InstalledApp) -> Unit
 ) : RecyclerView.Adapter<AppListAdapter.VH>() {
 
@@ -16,6 +16,12 @@ class AppListAdapter(
         val icon: ImageView = view.findViewById(R.id.appIcon)
         val name: TextView = view.findViewById(R.id.appName)
         val pkg: TextView = view.findViewById(R.id.appPackage)
+        val cloneInfo: TextView = view.findViewById(R.id.cloneInfo)
+    }
+
+    fun updateData(newApps: List<InstalledApp>) {
+        apps = newApps
+        notifyDataSetChanged()
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -28,6 +34,18 @@ class AppListAdapter(
         holder.name.text = app.label
         holder.pkg.text = app.packageName
         holder.icon.setImageDrawable(app.icon)
+
+        if (app.existingCloneCount > 0) {
+            holder.cloneInfo.visibility = View.VISIBLE
+            holder.cloneInfo.text = if (app.existingCloneCount == 1) {
+                "1 clone already installed"
+            } else {
+                "${app.existingCloneCount} clones already installed"
+            }
+        } else {
+            holder.cloneInfo.visibility = View.GONE
+        }
+
         holder.itemView.setOnClickListener { onClick(app) }
     }
 

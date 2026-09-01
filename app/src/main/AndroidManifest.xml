@@ -10,7 +10,7 @@
         android:requestLegacyExternalStorage="true"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="AppClonerClassic"
+        android:label="Dual App Cloner"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppClonerClassic">
 

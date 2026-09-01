@@ -11,8 +11,8 @@ android {
         applicationId "com.savedbylight.appclonerclassic"
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName "1.0.0 Classic"
+        versionCode 2
+        versionName "1.1.0 Dual"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

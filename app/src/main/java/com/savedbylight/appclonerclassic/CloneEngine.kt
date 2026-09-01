@@ -105,10 +105,14 @@ class CloneEngine(private val context: Context) {
                 "(base + ${splitDirs?.size ?: 0} split APK(s), workDir=${workDir.absolutePath}) ==="
         )
 
+        // Extract clone number for icon badge (e.g. "com.foo.clone3" → 3)
+        val cloneNumber = Regex("""\.clone(\d+)$""").find(targetPackageName)
+            ?.groupValues?.get(1)?.toIntOrNull() ?: 1
+
         // 1. Process Base APK
         val baseTargetFile = File(workDir, "base_signed.apk")
         Logger.log("Processing Base APK: ${baseSourceFile.name} (${baseSourceFile.length()} bytes)")
-        processSingleApk(baseSourceFile, baseTargetFile, oldPackageName, targetPackageName, badgeIcon = true)
+        processSingleApk(baseSourceFile, baseTargetFile, oldPackageName, targetPackageName, badgeIcon = true, cloneNumber = cloneNumber)
         Logger.log("  Finished base_signed.apk (${baseTargetFile.length()} bytes)")
         clonedApkFiles.add(baseTargetFile)
 
@@ -121,7 +125,7 @@ class CloneEngine(private val context: Context) {
                 Logger.log("Processing Split APK [$index]: ${splitSourceFile.name} (${splitSourceFile.length()} bytes)")
                 // Launcher icon assets live in the base APK; splits don't
                 // need (and shouldn't get) their own badge pass.
-                processSingleApk(splitSourceFile, splitTargetFile, oldPackageName, targetPackageName, badgeIcon = false)
+                processSingleApk(splitSourceFile, splitTargetFile, oldPackageName, targetPackageName, badgeIcon = false, cloneNumber = cloneNumber)
                 Logger.log("  Finished split_${index}_signed.apk (${splitTargetFile.length()} bytes)")
                 clonedApkFiles.add(splitTargetFile)
             }
@@ -459,7 +463,8 @@ class CloneEngine(private val context: Context) {
         destination: File,
         oldPackageName: String,
         newPackageName: String,
-        badgeIcon: Boolean
+        badgeIcon: Boolean,
+        cloneNumber: Int = 1
     ) {
         val tempUnsigned = File.createTempFile("temp_unsigned", ".apk", context.cacheDir)
         try {
@@ -469,7 +474,7 @@ class CloneEngine(private val context: Context) {
 
             // Rewrite binary AXML manifest parameters and (for the base
             // APK) badge the launcher icon, in place inside the zip
-            rewriteApkContents(tempUnsigned, oldPackageName, newPackageName, badgeIcon)
+            rewriteApkContents(tempUnsigned, oldPackageName, newPackageName, badgeIcon, cloneNumber)
 
             // Re-sign modified APK binary and output to destination. Every
             // APK in a clone (base + splits) must be signed with the SAME
@@ -503,7 +508,8 @@ class CloneEngine(private val context: Context) {
         apkFile: File,
         oldPackageName: String,
         newPackageName: String,
-        badgeIcon: Boolean
+        badgeIcon: Boolean,
+        cloneNumber: Int = 1
     ) {
         val rewrittenApk = File.createTempFile("apk_rewrite", ".apk", context.cacheDir)
         try {
@@ -525,7 +531,7 @@ class CloneEngine(private val context: Context) {
                             }
                             badgeIcon && isLauncherIconEntry(entry.name) -> {
                                 iconsBadged++
-                                badgeLauncherIcon(entry.name, bytes)
+                                badgeLauncherIcon(entry.name, bytes, cloneNumber)
                             }
                             else -> bytes
                         }
@@ -579,23 +585,26 @@ class CloneEngine(private val context: Context) {
         return lower.contains("ic_launcher")
     }
 
-    /** Overlays a small badge (orange circle, ring, "C") onto a launcher
-     *  icon's bottom-right corner so a clone is visually distinguishable
-     *  from the original app in the launcher — both for the user's own
-     *  sanity and because a clone that's pixel-identical to a well-known
-     *  app under a different package name is exactly what impersonation
-     *  heuristics look for. Falls back to the original bytes untouched if
-     *  decoding fails for any reason (e.g. an unexpected image format). */
-    private fun badgeLauncherIcon(entryName: String, bytes: ByteArray): ByteArray {
+    /** Overlays a numbered badge (orange circle + clone number) onto a launcher
+     *  icon's bottom-right corner so clones are easy to tell apart in the
+     *  app drawer. Shows "2", "3", … instead of a generic "C". Falls back
+     *  to the original bytes if decoding fails. */
+    private fun badgeLauncherIcon(entryName: String, bytes: ByteArray, cloneNumber: Int = 1): ByteArray {
         return try {
             val original = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return bytes
             val badged = original.copy(Bitmap.Config.ARGB_8888, true)
             val canvas = Canvas(badged)
             val w = badged.width.toFloat()
             val h = badged.height.toFloat()
-            val radius = w * 0.22f
+            val radius = w * 0.24f
             val cx = w - radius * 0.85f
             val cy = h - radius * 0.85f
+
+            // Soft shadow
+            val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.parseColor("#66000000")
+            }
+            canvas.drawCircle(cx + 1.5f, cy + 1.5f, radius, shadowPaint)
 
             val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.parseColor("#FF6D00")
@@ -605,19 +614,20 @@ class CloneEngine(private val context: Context) {
             val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.WHITE
                 style = Paint.Style.STROKE
-                strokeWidth = radius * 0.12f
+                strokeWidth = radius * 0.11f
             }
             canvas.drawCircle(cx, cy, radius - ringPaint.strokeWidth / 2f, ringPaint)
 
+            val label = if (cloneNumber in 1..99) cloneNumber.toString() else "C"
             val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.WHITE
                 textAlign = Paint.Align.CENTER
-                textSize = radius * 1.15f
+                textSize = if (label.length == 1) radius * 1.25f else radius * 1.05f
                 isFakeBoldText = true
             }
             val fm = textPaint.fontMetrics
             val textY = cy - (fm.ascent + fm.descent) / 2f
-            canvas.drawText("C", cx, textY, textPaint)
+            canvas.drawText(label, cx, textY, textPaint)
 
             ByteArrayOutputStream().use { stream ->
                 badged.compress(Bitmap.CompressFormat.PNG, 100, stream)

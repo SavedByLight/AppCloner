@@ -1,111 +1,59 @@
-# AppClonerClassic (Android)
+# Dual App Cloner (AppClonerClassic)
 
-Native Android app that clones an already-installed app so you can run it as
-a second, independent instance (e.g. two WhatsApp accounts) — the same
-technique used by Play Store apps like "App Cloner" and "Parallel Space".
+Native Android app that creates **independent second instances** of any user-installed app — the same technique used by Parallel Space, Dual Apps, and Island. Ideal for devices that lack a built-in dual-app / App Twin feature.
 
-## How it actually works
+## What’s new in 1.1.0 Dual
 
-There's no OS-level "run app twice" API on stock Android, so the real trick
-is: **make a second app that Android thinks is a completely different app.**
+- **Two-tab UI**: “Clone New” and “My Clones”
+- **Clone manager**: list every existing clone, open it, or uninstall it with one tap
+- **Search** across both lists
+- **Clone counts** shown next to apps that already have dual instances
+- **Numbered icon badges** (shows 2, 3, … instead of a generic “C”)
+- Clearer confirm dialogs and status feedback
+- Robust PackageInstaller session + automatic export to Downloads for manual install when OEMs block the system installer
 
-1. Pull the target app's APK from `ApplicationInfo.sourceDir`.
-2. Open `AndroidManifest.xml` inside the APK — it's stored in a compact
-   *binary* format (AXML), not plain text — and rewrite the `package`
-   attribute plus any `<provider android:authorities="...">` values so they
-   don't collide with the original app. Done via the `pxb.android:axml`
-   library, so no full apktool decompile/recompile round trip is needed.
-3. Re-zip the APK with the new manifest, dropping the old `META-INF/`
-   signing files.
-4. Sign the result with a freshly generated key using Google's own
-   `apksig` library (the same one `apksigner` on the command line uses).
-   This is required — the original signature is invalid once the manifest
-   bytes changed, and Android refuses to install anything unsigned or
-   tampered.
-5. Hand the signed APK to the system installer via a `FileProvider` +
-   `ACTION_VIEW` intent, same as installing any APK.
+## How it works
 
-Every step logs to an in-app **Log page** (`View Logs` button on the main
-screen → `LogActivity`) — a persistent, timestamped record of each clone
-attempt (copy → manifest rewrite → sign → install trigger, or the error if
-one of those steps fails), backed by `Logger.kt`, which keeps entries in
-memory and appends them to `filesDir/clone_log.txt` so history survives an
-app restart.
+There is no official “run app twice” API on stock Android. The reliable approach is:
 
-## Building it
+1. Copy the target app’s APK(s) (base + any splits).
+2. Rewrite the binary `AndroidManifest.xml` (package name, provider authorities, process, taskAffinity, custom permissions) so the clone is a completely different app to the system.
+3. Badge the launcher icon with the clone number.
+4. Re-sign with a fresh key (required after any manifest change).
+5. Install via PackageInstaller session (or fall back to the exported APKs in Downloads).
 
-```
-cd AppCloner
+Each clone gets its own `/data/data/<package>/` storage, so accounts, preferences and databases are fully isolated.
+
+## Building
+
+```bash
+cd AppCloner-classic
+# First time only if gradlew is missing:
+gradle wrapper --gradle-version 8.7
+
 ./gradlew assembleDebug
 ```
 
-(You'll need to run `gradle wrapper` once first if there's no `gradlew` in
-the zip — I generated this outside Android Studio so the wrapper jar isn't
-included. Easiest path: open the folder in Android Studio and let it sync,
-or run `gradle wrapper --gradle-version 8.7` before the build.)
+Requirements: JDK 17, Android SDK with compileSdk 34, AGP 8.4+.
 
-Requires `compileSdk 34` / AGP 8.4.1 / JDK 17, same toolchain you're already
-using for TWRP/LineageOS Soong builds.
+Or simply open the folder in Android Studio and let it sync & build.
 
-## Real limitations — worth knowing before you rely on this
+## Real limitations
 
-- **Anti-tamper / signature-pinned apps will detect this.** Banking apps,
-  many games, and anything checking `BuildConfig.APPLICATION_ID`,
-  SafetyNet/Play Integrity, or its own signing cert at runtime will refuse
-  to run or will misbehave. This isn't fixable at the manifest level — it'd
-  require patching the actual DEX/native code, which is a different
-  (and much murkier) project.
-- **Google / Facebook login usually fails on clones.** Those providers bind
-  OAuth to the original package name + signing certificate. A re-signed
-  clone has neither, so social login is rejected. Prefer phone/email login
-  when the app offers it.
-- **Do not rewrite component class names.** `android:name` / `targetActivity`
-  are DEX class names. Renaming them to the clone package makes ClassLoader
-  miss the class → providers never publish ("Failed to find provider info")
-  and login UIs white-screen. Only package, authorities, process,
-  taskAffinity, and custom permissions are rewritten.
-- **Shared prefs / SQL storage collisions are avoided for free** — since the
-  cloned app gets a distinct package name, Android gives it its own
-  `/data/data/<pkg>/` automatically. No extra work needed there.
-- **`resources.arsc` isn't touched.** Fine for the vast majority of apps,
-  but an app that reads its own package name out of resources rather than
-  `Context.getPackageName()` won't fully cooperate.
-- **APK Signature Scheme v2/v3 + this rewrite means you must re-sign.**
-  There's no way around that; it's inherent to what's being done here.
-- Google Play policy explicitly disallows apps that clone/repackage other
-  apps' listings on the Play Store — this is fine for sideloading on your
-  own device, not something to publish as-is.
+- **Anti-tamper / signature-pinned apps** (many banking apps, some games, Snapchat, etc.) detect the changed certificate or package and may refuse to run or show temporary blocks. This is expected and not fixable at the manifest level.
+- **Google / Facebook login** usually fails on clones because those providers bind to the original package name + signing certificate. Prefer phone / email login when available.
+- Component class names (`android:name`) are deliberately **not** rewritten — changing them breaks ClassLoader resolution.
+- Google Play policy disallows publishing apps that clone other apps; this tool is intended for personal sideloading only.
 
-## CI / Releases
+## Usage tips
 
-`.github/workflows/build.yml` handles this for
-`github.com/SavedByLight/<repo>` on the `main` branch:
+1. Grant “Install unknown apps” permission when prompted.
+2. After cloning, confirm the system install dialog.
+3. If the install is blocked by Samsung Auto Blocker / Play Protect / Knox, open the exported folder under `Downloads/AppCloner/<package>/` and install with SAI or `adb install-multiple`.
+4. Use the **My Clones** tab to manage or remove dual instances later.
 
-- **Every push/PR to `main`** — builds a debug APK and uploads it as a
-  workflow artifact (`Actions` tab → run → `AppCloner-debug-apk`).
-- **Every push directly to `main`** (not PRs) — additionally creates a new
-  GitHub Release automatically, no manual tagging needed. It generates a
-  tag like `v0.1.<run number>` and attaches the debug APK, with notes
-  auto-generated from commits since the last tag via
-  `softprops/action-gh-release`.
+## License / Credits
 
-It uses `gradle/actions/setup-gradle` and `android-actions/setup-android`
-so no Gradle wrapper needs to be committed — the workflow provisions its
-own Gradle + Android SDK. Every merge to `main` now shows up as a new
-release on the repo's Releases page within a couple minutes.
-
-Note it currently builds and ships the **debug**-signed APK, since that's
-zero-config (AGP auto-generates a debug keystore) and fine for sideloading
-on your own device. If you want a proper release-signed APK instead,
-that needs a keystore + `signingConfigs.release` block in `app/build.gradle`
-plus the keystore/passwords stored as repo secrets — happy to add that if
-you want a stable signing identity across releases (recommended if you'll
-be upgrading the clone in place rather than reinstalling each time).
-
-## Where I'd take it next
-
-- Batch mode: clone N instances (`.clone1`, `.clone2`, ...) instead of one.
-- A settings toggle per clone to also rewrite the launcher icon/label so
-  clones are visually distinguishable in the app drawer.
-- Optional resources.arsc string-pool rewrite for apps that read their own
-  package name back out of resources.
+Open-source educational / personal-use project. Uses:
+- `pxb.android.axml` for binary manifest rewriting
+- Google `apksig` for proper v1/v2/v3 signing
