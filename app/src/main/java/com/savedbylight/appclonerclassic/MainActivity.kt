@@ -204,7 +204,7 @@ class MainActivity : AppCompatActivity() {
             .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 }
             .filter { it.packageName != packageName }
             .filter { !isExcludedFromCloning(it.packageName) }
-            .filter { !it.packageName.contains(".clone") } // don't list clones in the "to clone" list
+            .filter { !CloneUtils.isStealthClone(this, it.packageName) }
             .mapNotNull { ai ->
                 try {
                     InstalledApp(
@@ -226,9 +226,8 @@ class MainActivity : AppCompatActivity() {
         val pm = packageManager
         pm.getInstalledApplications(0).forEach { ai ->
             val pkg = ai.packageName
-            val match = Regex("""^(.+)\.clone(\d+)$""").find(pkg)
-            if (match != null) {
-                val base = match.groupValues[1]
+            if (CloneUtils.isStealthClone(this, pkg)) {
+                val base = CloneUtils.extractBasePackage(pkg) ?: return@forEach
                 counts[base] = (counts[base] ?: 0) + 1
             }
         }
@@ -240,11 +239,10 @@ class MainActivity : AppCompatActivity() {
         return pm.getInstalledApplications(0)
             .mapNotNull { ai ->
                 val pkg = ai.packageName
-                val match = Regex("""^(.+)\.clone(\d+)$""").find(pkg) ?: return@mapNotNull null
-                val base = match.groupValues[1]
-                val num = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+                if (!CloneUtils.isStealthClone(this, pkg)) return@mapNotNull null
+                val base = CloneUtils.extractBasePackage(pkg) ?: return@mapNotNull null
+                val suffix = pkg.removePrefix("$base.")
                 try {
-                    // Prefer the base app's label if still installed
                     val baseLabel = try {
                         val baseInfo = pm.getApplicationInfo(base, 0)
                         pm.getApplicationLabel(baseInfo).toString()
@@ -255,14 +253,14 @@ class MainActivity : AppCompatActivity() {
                         label = baseLabel,
                         packageName = pkg,
                         basePackageName = base,
-                        cloneNumber = num,
+                        cloneSuffix = suffix,
                         icon = pm.getApplicationIcon(ai)
                     )
                 } catch (_: Exception) {
                     null
                 }
             }
-            .sortedWith(compareBy({ it.label.lowercase() }, { it.cloneNumber }))
+            .sortedWith(compareBy({ it.label.lowercase() }, { it.cloneSuffix }))
     }
 
     private fun onAppSelected(app: InstalledApp) {
@@ -293,7 +291,7 @@ class MainActivity : AppCompatActivity() {
 
                 val targetPkg = resultApks.firstOrNull()?.parentFile?.name
                     ?.removePrefix("clone_work_")
-                    ?: "${app.packageName}.clone?"
+                    ?: "unknown"
 
                 statusText.text = "Cloned → $targetPkg"
                 Toast.makeText(

@@ -34,7 +34,7 @@ class CloneListAdapter(
 
     override fun onBindViewHolder(holder: VH, position: Int) {
         val clone = clones[position]
-        holder.name.text = "${clone.label} (${clone.cloneNumber})"
+        holder.name.text = "${clone.label} (${clone.cloneSuffix})"
         holder.pkg.text = clone.packageName
         holder.icon.setImageDrawable(clone.icon)
         holder.openBtn.setOnClickListener { onOpen(clone) }

@@ -14,6 +14,6 @@ data class CloneInfo(
     val label: String,
     val packageName: String,
     val basePackageName: String,
-    val cloneNumber: Int,
+    val cloneSuffix: String,
     val icon: Drawable
 )
