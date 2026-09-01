@@ -58,8 +58,12 @@ using for TWRP/LineageOS Soong builds.
 - **Google / Facebook login usually fails on clones.** Those providers bind
   OAuth to the original package name + signing certificate. A re-signed
   clone has neither, so social login is rejected. Prefer phone/email login
-  when the app offers it. White screens on TikTok login are often the same
-  class of runtime identity check — not a missing manifest attribute.
+  when the app offers it.
+- **Do not rewrite component class names.** `android:name` / `targetActivity`
+  are DEX class names. Renaming them to the clone package makes ClassLoader
+  miss the class → providers never publish ("Failed to find provider info")
+  and login UIs white-screen. Only package, authorities, process,
+  taskAffinity, and custom permissions are rewritten.
 - **Shared prefs / SQL storage collisions are avoided for free** — since the
   cloned app gets a distinct package name, Android gives it its own
   `/data/data/<pkg>/` automatically. No extra work needed there.
