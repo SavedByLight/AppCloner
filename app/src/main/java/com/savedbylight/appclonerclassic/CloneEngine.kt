@@ -685,7 +685,9 @@ class CloneEngine(private val context: Context) {
      *  attribute rewrites can be scoped to where a package-name substitution
      *  is actually correct:
      *   - <manifest package="...">                        — exact match
-     *   - <provider android:authorities="...">             — substring (can be a comma list)
+     *   - <provider android:authorities="...">             — ALWAYS rewritten
+     *     (authorities are device-global; many apps use hardcoded strings that
+     *     do not contain the package name, e.g. TikTok's SHARE_PROVIDER_…)
      *   - <application/activity/activity-alias/service/receiver/provider
      *     android:name="...">                              — prefix match (FQCN)
      *   - android:process="..." on any component            — prefix match
@@ -704,8 +706,14 @@ class CloneEngine(private val context: Context) {
                 newValue = when {
                     tag == "manifest" && name == "package" && value == oldPkg ->
                         newPkg
-                    tag == "provider" && name == "authorities" && value.contains(oldPkg) ->
-                        value.replace(oldPkg, newPkg)
+                    // ContentProvider authorities are device-global. Many apps
+                    // (TikTok/ByteDance, some SDKs, etc.) use hardcoded authority
+                    // strings that do NOT contain the package name, so a simple
+                    // "contains(oldPkg)" check leaves them unchanged and the
+                    // install fails with INSTALL_FAILED_CONFLICTING_PROVIDER.
+                    // Always rewrite every authority to guarantee uniqueness.
+                    tag == "provider" && name == "authorities" ->
+                        CloneEngine.rewriteAuthorities(value, oldPkg, newPkg)
                     tag in COMPONENT_TAGS && name == "name" && value.startsWith(oldPkg) ->
                         newPkg + value.removePrefix(oldPkg)
                     tag in COMPONENT_TAGS && name == "process" && value.startsWith(oldPkg) ->
@@ -934,6 +942,51 @@ class CloneEngine(private val context: Context) {
         /** Attributes that reference a (possibly custom) permission name to
          *  gate access to a component. */
         private val PERMISSION_REFERENCE_ATTRS = setOf("permission", "readPermission", "writePermission")
+
+        /**
+         * Rewrites one or more ContentProvider authorities so they are unique
+         * on the device. Authorities may be a single string or a list separated
+         * by ';' (preferred by Android) or ','.
+         *
+         * - If an authority already contains [oldPkg], perform a simple package
+         *   rename (preserves the original shape).
+         * - Otherwise (hardcoded authorities used by TikTok, many SDKs, etc.)
+         *   prefix with [newPkg] so the result is guaranteed not to collide
+         *   with the original app or any other clone.
+         */
+        fun rewriteAuthorities(authorities: String, oldPkg: String, newPkg: String): String {
+            val sep = when {
+                authorities.contains(';') -> ";"
+                authorities.contains(',') -> ","
+                else -> null
+            }
+            return if (sep != null) {
+                authorities.split(sep).joinToString(sep) { part ->
+                    rewriteSingleAuthority(part.trim(), oldPkg, newPkg)
+                }
+            } else {
+                rewriteSingleAuthority(authorities, oldPkg, newPkg)
+            }
+        }
+
+        private fun rewriteSingleAuthority(auth: String, oldPkg: String, newPkg: String): String {
+            if (auth.isEmpty()) return auth
+            // Already embeds the original package → simple replace keeps the shape.
+            if (auth.contains(oldPkg)) {
+                return auth.replace(oldPkg, newPkg)
+            }
+            // Hardcoded authority that does not embed the package name
+            // (e.g. com.ss.android.common.multiprocess.SHARE_PROVIDER_AUTHORITY1233
+            // used by TikTok / ByteDance). Prefix with the new package name so
+            // the result is device-unique and never collides with the original.
+            // Example:
+            //   com.zhiliaoapp.musically.clone1.com.ss.android.common.multiprocess.SHARE_PROVIDER_AUTHORITY1233
+            val rewritten = "$newPkg.$auth"
+            // Log only the interesting (non-package) case so the user can see
+            // why a previously-colliding authority was fixed.
+            Logger.log("AXML: rewriting hardcoded authority '$auth' -> '$rewritten'")
+            return rewritten
+        }
 
         private const val PREFS_NAME = "app_cloner_prefs"
         private const val PREF_KEY_INSTALLER_PACKAGE = "preferred_installer_package"
