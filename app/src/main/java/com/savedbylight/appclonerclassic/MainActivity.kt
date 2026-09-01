@@ -300,7 +300,7 @@ class MainActivity : AppCompatActivity() {
                     Toast.LENGTH_LONG
                 ).show()
 
-                engine.launchInstall(targetPkg, resultApks)
+                engine.installPackageSession(targetPkg, resultApks)
 
                 // Refresh after a short delay so the new clone appears if install succeeds
                 statusText.postDelayed({ refreshClonesOnly() }, 4000)
@@ -332,7 +332,7 @@ class MainActivity : AppCompatActivity() {
     private fun confirmUninstall(clone: CloneInfo) {
         AlertDialog.Builder(this)
             .setTitle("Remove clone?")
-            .setMessage("Uninstall “${clone.label} (${clone.cloneNumber})”?\n\n${clone.packageName}\n\nThis only removes the clone, not the original app.")
+            .setMessage("Uninstall “${clone.label} (${clone.cloneSuffix})”?\n\n${clone.packageName}\n\nThis only removes the clone, not the original app.")
             .setPositiveButton("Uninstall") { _, _ ->
                 try {
                     val intent = Intent(Intent.ACTION_DELETE).apply {
