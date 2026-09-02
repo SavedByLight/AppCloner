@@ -108,11 +108,12 @@ object PlayIntegrityDetector {
         } catch (_: Exception) { }
 
         // 5. Check for split APKs with Play-specific config
-        if (!appInfo.splitSourceDirs.isNullOrEmpty()) {
-            val configSplits = appInfo.splitSourceDirs.filter { it.contains("config.") }
+        val splitDirs = appInfo.splitSourceDirs
+        if (!splitDirs.isNullOrEmpty()) {
+            val configSplits = splitDirs.filter { it.contains("config.") }
             if (configSplits.isNotEmpty()) {
                 // Not a risk by itself, but worth noting
-                reasons.add("${appInfo.splitSourceDirs.size} split APK(s) — multi-split clones need SAI/adb")
+                reasons.add("${splitDirs.size} split APK(s) — multi-split clones need SAI/adb")
             }
         }
 
@@ -130,14 +131,14 @@ object PlayIntegrityDetector {
                     "This app likely uses Play Integrity or Firebase App Check. " +
                     "The clone will probably crash or refuse to sign in because the " +
                     "APK signature and package name no longer match the Google Cloud project.\n\n" +
-                    "TIP: Enable "Inject Frida" toggle and download gadgets. This patches " +
+                    "TIP: Enable \"Inject Frida\" toggle and download gadgets. This patches " +
                     "CLIENT-SIDE checks (signature comparison, root detection) but CANNOT " +
                     "bypass server-side Google attestation."
             RiskLevel.CRITICAL ->
                 "CRITICAL: ${report.reasons.joinToString("; ")}.\n\n" +
                     "This app is known to block cloned/re-signed copies server-side. " +
-                    "The clone will almost certainly fail with a "Something went wrong" or " +
-                    ""Google Play" error.\n\n" +
+                    "The clone will almost certainly fail with a \"Something went wrong\" or " +
+                    "\"Google Play\" error.\n\n" +
                     "Frida injection will patch CLIENT-SIDE checks but CANNOT forge " +
                     "server-side Play Integrity tokens. For these apps you need:\n" +
                     "1) A second physical device, OR\n" +

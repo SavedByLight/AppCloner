@@ -1,7 +1,7 @@
 package com.savedbylight.appclonerclassic
 
+import android.content.Context
 import java.io.File
-import java.io.RandomAccessFile
 import java.nio.charset.StandardCharsets
 
 /**
