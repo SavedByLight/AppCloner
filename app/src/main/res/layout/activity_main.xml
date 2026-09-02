@@ -32,6 +32,41 @@
             android:text="Create independent second instances of any app"
             android:textSize="13sp"
             android:textColor="#757575"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp"
+            android:gravity="center_vertical">
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/fridaSwitch"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Inject Frida"
+                android:textSize="12sp"
+                android:checked="false"/>
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/dexPatchSwitch"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Patch DEX"
+                android:textSize="12sp"
+                android:checked="false"/>
+
+            <Button
+                android:id="@+id/downloadFridaButton"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Download"
+                android:textSize="11sp"
+                android:textColor="#FF6D00"/>
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Mode switcher -->

@@ -17,6 +17,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.tabs.TabLayout
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -65,6 +66,39 @@ class MainActivity : AppCompatActivity() {
         cloneListRecycler = findViewById(R.id.cloneListRecycler)
         searchEditText = findViewById(R.id.searchEditText)
         tabLayout = findViewById(R.id.tabLayout)
+        fridaSwitch = findViewById(R.id.fridaSwitch)
+        dexPatchSwitch = findViewById(R.id.dexPatchSwitch)
+        downloadFridaButton = findViewById(R.id.downloadFridaButton)
+
+        dexPatchSwitch.isChecked = SmaliPatcher.shouldPatch(this)
+        dexPatchSwitch.setOnCheckedChangeListener { _, isChecked ->
+            SmaliPatcher.setShouldPatch(this, isChecked)
+            Toast.makeText(this,
+                if (isChecked) "DEX patching ENABLED (breaks signature/root checks)"
+                else "DEX patching DISABLED",
+                Toast.LENGTH_SHORT).show()
+        }
+
+        fridaSwitch.isChecked = FridaInjector.shouldInject(this)
+        fridaSwitch.setOnCheckedChangeListener { _, isChecked ->
+            FridaInjector.setShouldInject(this, isChecked)
+            Toast.makeText(this,
+                if (isChecked) "Frida injection ENABLED for next clones"
+                else "Frida injection DISABLED",
+                Toast.LENGTH_SHORT).show()
+        }
+
+        downloadFridaButton.setOnClickListener {
+            CoroutineScope(Dispatchers.IO).launch {
+                val ok = FridaInjector.ensureGadgetsDownloaded(this@MainActivity)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity,
+                        if (ok) "Frida gadgets ready"
+                        else "Download failed. Check internet / GitHub access.",
+                        Toast.LENGTH_LONG).show()
+                }
+            }
+        }
 
         appListRecycler.layoutManager = LinearLayoutManager(this)
         cloneListRecycler.layoutManager = LinearLayoutManager(this)
@@ -300,7 +334,7 @@ class MainActivity : AppCompatActivity() {
                     Toast.LENGTH_LONG
                 ).show()
 
-                engine.installPackageSession(targetPkg, resultApks)
+                engine.launchInstall(targetPkg, resultApks)
 
                 // Refresh after a short delay so the new clone appears if install succeeds
                 statusText.postDelayed({ refreshClonesOnly() }, 4000)
@@ -332,7 +366,7 @@ class MainActivity : AppCompatActivity() {
     private fun confirmUninstall(clone: CloneInfo) {
         AlertDialog.Builder(this)
             .setTitle("Remove clone?")
-            .setMessage("Uninstall “${clone.label} (${clone.cloneSuffix})”?\n\n${clone.packageName}\n\nThis only removes the clone, not the original app.")
+            .setMessage("Uninstall “${clone.label} (${clone.cloneNumber})”?\n\n${clone.packageName}\n\nThis only removes the clone, not the original app.")
             .setPositiveButton("Uninstall") { _, _ ->
                 try {
                     val intent = Intent(Intent.ACTION_DELETE).apply {

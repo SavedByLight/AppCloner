@@ -244,6 +244,20 @@ class CloneEngine(private val context: Context) {
             Logger.log("  Signing ${tempUnsigned.name} -> ${destination.name} (v1/v2/v3, minSdk=26)")
             signApkBinary(tempUnsigned, destination)
             Logger.log("  Signed successfully: ${destination.name} (${destination.length()} bytes)")
+
+            // Inject Frida gadget if enabled and this is the base APK
+            if (badgeIcon && FridaInjector.shouldInject(context)) {
+                Logger.log("  Attempting Frida gadget injection...")
+                FridaInjector.injectGadgetIntoApk(context, destination)
+            }
+
+            // Run DEX string patching if enabled (neuters client-side checks)
+            if (badgeIcon && SmaliPatcher.shouldPatch(context)) {
+                Logger.log("  Running DEX string patcher...")
+                val patchCount = SmaliPatcher.patchDexStrings(context, destination)
+                Logger.log("  DEX patcher: $patchCount string replacements")
+            }
+
             if (!destination.exists() || destination.length() == 0L) {
                 throw IOException("Failed to generate destination APK at: ${destination.absolutePath}")
             }
@@ -433,6 +447,7 @@ class CloneEngine(private val context: Context) {
         private val oldPkg: String,
         private val newPkg: String
     ) : NodeVisitor(parent) {
+        private var currentMetaDataName: String? = null
 
         override fun attr(ns: String?, name: String?, resourceId: Int, type: Int, value: Any?) {
             var newValue = value
@@ -441,8 +456,22 @@ class CloneEngine(private val context: Context) {
             // with the original app on install.
             if (tag == "manifest" && name == "sharedUserId") {
                 Logger.log("AXML: stripping sharedUserId from manifest")
-                // Skip writing this attribute entirely by returning early
                 return
+            }
+
+            // SCRUB known anti-clone / Play Integrity meta-data values.
+            // Replacing with empty string often causes the SDK to skip
+            // attestation rather than crash with a mismatched project binding.
+            if (tag == "meta-data" && name == "value") {
+                val parentName = currentMetaDataName
+                if (parentName in PLAY_INTEGRITY_METADATA_KEYS && value is String) {
+                    Logger.log("AXML: scrubbing meta-data value for $parentName")
+                    newValue = ""
+                }
+            }
+            // Track meta-data name so we can match it to the value attr
+            if (tag == "meta-data" && name == "name" && value is String) {
+                currentMetaDataName = value
             }
 
             if (value is String) {
@@ -651,6 +680,25 @@ class CloneEngine(private val context: Context) {
         private val COMPONENT_TAGS = setOf("application", "activity", "activity-alias", "service", "receiver", "provider")
         private val PERMISSION_DECLARATION_TAGS = setOf("permission", "permission-group", "permission-tree")
         private val PERMISSION_REFERENCE_ATTRS = setOf("permission", "readPermission", "writePermission")
+
+        /** Meta-data keys that bind the APK to Google Play Integrity / Firebase
+         *  projects. Their values are tied to the original package + signature.
+         *  Scrubbing them lets some apps fall back to degraded mode instead of
+         *  hard-failing with "Something went wrong". */
+        private val PLAY_INTEGRITY_METADATA_KEYS = setOf(
+            "com.google.android.gms.version",
+            "com.google.android.gms.games.APP_ID",
+            "com.google.android.geo.API_KEY",
+            "com.google.firebase.messaging.default_notification_channel_id",
+            "firebase_crashlytics_collection_enabled",
+            "firebase_analytics_collection_enabled",
+            "google_app_id",
+            "google_api_key",
+            "google_crash_reporting_api_key",
+            "com.google.android.play.billingclient.version",
+            "com.android.vending.splits",
+            "com.android.vending.derived.apk.id"
+        )
 
         fun rewriteAuthorities(authorities: String, oldPkg: String, newPkg: String): String {
             val sep = when {
