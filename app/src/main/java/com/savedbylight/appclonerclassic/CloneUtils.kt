@@ -8,8 +8,13 @@ import org.json.JSONArray
  * Utilities for generating stealth clone package names and tracking them.
  * Sequential .clone1, .clone2 suffixes are trivially pattern-matched by
  * apps doing simple package-name heuristics. Random alphanumeric suffixes
- * (e.g. com.foo.x7k9m2) are far less obvious and avoid collisions
+ * (e.g. com.foo.xk7m9a) are far less obvious and avoid collisions
  * without leaking clone count.
+ *
+ * Android package-name rules (PackageParser): each dot-separated segment
+ * must match [a-zA-Z][a-zA-Z0-9_]*. A segment may NOT start with a digit —
+ * names like com.snapchat.android.8x1pyf fail with
+ * INSTALL_PARSE_FAILED_BAD_PACKAGE_NAME ("bad character '8'").
  */
 object CloneUtils {
 
@@ -17,10 +22,29 @@ object CloneUtils {
     private const val KEY_CLONE_LIST = "clone_list"
     private const val SUFFIX_LENGTH = 6
 
-    private val RANDOM_CHARS = ('a'..'z') + ('0'..'9')
+    /** First character of a package segment must be a letter. */
+    private val FIRST_CHARS = ('a'..'z').toList()
+    /** Remaining characters may be letter or digit. */
+    private val REST_CHARS = ('a'..'z') + ('0'..'9')
 
-    fun randomSuffix(length: Int = SUFFIX_LENGTH): String =
-        (1..length).map { RANDOM_CHARS.random() }.joinToString("")
+    /**
+     * Random suffix that is a valid Android package-name segment:
+     * letter first, then letters/digits only.
+     */
+    fun randomSuffix(length: Int = SUFFIX_LENGTH): String {
+        require(length >= 1)
+        val first = FIRST_CHARS.random()
+        if (length == 1) return first.toString()
+        val rest = (1 until length).map { REST_CHARS.random() }.joinToString("")
+        return first + rest
+    }
+
+    /** True if [name] is a valid Android application package name. */
+    fun isValidPackageName(name: String): Boolean {
+        if (name.isEmpty() || name.startsWith('.') || name.endsWith('.')) return false
+        val segmentRegex = Regex("^[a-zA-Z][a-zA-Z0-9_]*$")
+        return name.split('.').all { it.isNotEmpty() && segmentRegex.matches(it) }
+    }
 
     /**
      * Generates a candidate package name and verifies it is not already
@@ -32,22 +56,22 @@ object CloneUtils {
         var attempts = 0
         while (attempts < 1000) {
             val candidate = "$basePackageName.${randomSuffix()}"
-            if (candidate in existing) {
+            if (!isValidPackageName(candidate) || candidate in existing) {
                 attempts++
                 continue
             }
             try {
                 pm.getPackageInfo(candidate, 0)
-                // already installed by something else → try again
                 attempts++
                 continue
             } catch (_: PackageManager.NameNotFoundException) {
-                // free slot
                 return candidate
             }
         }
-        // Fallback with timestamp to guarantee uniqueness
-        return "$basePackageName.${System.currentTimeMillis()}"
+        // Letter-prefixed base36 timestamp so the last segment never starts with a digit
+        val ts = java.lang.Long.toString(System.currentTimeMillis(), 36)
+        val safeTs = if (ts.first().isDigit()) "t$ts" else ts
+        return "$basePackageName.$safeTs"
     }
 
     fun registerClone(context: Context, packageName: String) {
@@ -87,19 +111,14 @@ object CloneUtils {
 
     /**
      * Heuristic: does this package name look like one of our stealth clones?
-     * We check the registry first, then fall back to a loose pattern match
-     * (base package + dot + 6 alphanumeric chars) so existing clones
-     * created before this update are still recognised.
+     * Registry first, then base + dot + 6 alphanumeric chars (letter-leading).
      */
     fun isStealthClone(context: Context, packageName: String): Boolean {
         if (packageName in loadCloneList(context)) return true
-        // Loose fallback for legacy / unregistered clones
-        return packageName.matches(Regex("""^([a-zA-Z0-9_.]+)\.[a-z0-9]{6}$"""))
+        return packageName.matches(Regex("""^([a-zA-Z][a-zA-Z0-9_.]*)\.[a-z][a-z0-9]{5}$"""))
     }
 
     fun extractBasePackage(clonePackage: String): String? {
-        // Registry-based lookup: find longest registered base that is a prefix
-        // Fallback: strip last 7 chars (dot + 6 suffix)
         val parts = clonePackage.split(".")
         if (parts.size >= 2 && parts.last().length == SUFFIX_LENGTH) {
             return parts.dropLast(1).joinToString(".")

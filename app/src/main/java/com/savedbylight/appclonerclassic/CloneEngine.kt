@@ -241,22 +241,23 @@ class CloneEngine(private val context: Context) {
             source.copyTo(tempUnsigned, overwrite = true)
             Logger.log("  Copied ${source.name} to temp buffer (${tempUnsigned.length()} bytes)")
             rewriteApkContents(tempUnsigned, oldPackageName, newPackageName, badgeIcon)
+
+            // Frida + DEX patching MUST run on the unsigned APK. Mutating a
+            // signed APK strips/invalidates APK Signature Scheme v2/v3 and
+            // causes INSTALL_PARSE_FAILED_NO_CERTIFICATES at install time.
+            if (badgeIcon && FridaInjector.shouldInject(context)) {
+                Logger.log("  Attempting Frida gadget injection (pre-sign)...")
+                FridaInjector.injectGadgetIntoApk(context, tempUnsigned)
+            }
+            if (badgeIcon && SmaliPatcher.shouldPatch(context)) {
+                Logger.log("  Running DEX string patcher (pre-sign)...")
+                val patchCount = SmaliPatcher.patchDexStrings(context, tempUnsigned)
+                Logger.log("  DEX patcher: $patchCount string replacements")
+            }
+
             Logger.log("  Signing ${tempUnsigned.name} -> ${destination.name} (v1/v2/v3, minSdk=26)")
             signApkBinary(tempUnsigned, destination)
             Logger.log("  Signed successfully: ${destination.name} (${destination.length()} bytes)")
-
-            // Inject Frida gadget if enabled and this is the base APK
-            if (badgeIcon && FridaInjector.shouldInject(context)) {
-                Logger.log("  Attempting Frida gadget injection...")
-                FridaInjector.injectGadgetIntoApk(context, destination)
-            }
-
-            // Run DEX string patching if enabled (neuters client-side checks)
-            if (badgeIcon && SmaliPatcher.shouldPatch(context)) {
-                Logger.log("  Running DEX string patcher...")
-                val patchCount = SmaliPatcher.patchDexStrings(context, destination)
-                Logger.log("  DEX patcher: $patchCount string replacements")
-            }
 
             if (!destination.exists() || destination.length() == 0L) {
                 throw IOException("Failed to generate destination APK at: ${destination.absolutePath}")
