@@ -4,15 +4,15 @@
     android:gravity="center_vertical"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:paddingHorizontal="16dp"
-    android:paddingVertical="12dp"
+    android:paddingHorizontal="12dp"
+    android:paddingVertical="10dp"
     android:background="?attr/selectableItemBackground">
 
     <ImageView
         android:id="@+id/cloneIcon"
         android:layout_width="48dp"
         android:layout_height="48dp"
-        android:layout_marginEnd="16dp"
+        android:layout_marginEnd="12dp"
         android:scaleType="fitCenter"/>
 
     <LinearLayout
@@ -23,46 +23,68 @@
 
         <TextView
             android:id="@+id/cloneName"
-            android:textSize="16sp"
+            android:textSize="15sp"
             android:textColor="#212121"
             android:textStyle="bold"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"/>
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"/>
 
         <TextView
             android:id="@+id/clonePackage"
-            android:textSize="12sp"
+            android:textSize="11sp"
             android:textColor="#9E9E9E"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"/>
+            android:layout_marginTop="2dp"
+            android:maxLines="1"
+            android:ellipsize="middle"/>
     </LinearLayout>
 
     <LinearLayout
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:layout_width="wrap_content"
-        android:layout_height="wrap_content">
+        android:layout_height="wrap_content"
+        android:gravity="end">
 
-        <Button
-            android:id="@+id/openButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
+        <LinearLayout
+            android:orientation="horizontal"
             android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:text="Open"
-            android:textSize="13sp"
-            android:textColor="#FF6D00"
-            android:minWidth="0dp"
-            android:paddingHorizontal="12dp"/>
+            android:layout_height="wrap_content">
+
+            <Button
+                android:id="@+id/openButton"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:text="Open"
+                android:textSize="12sp"
+                android:textColor="#FF6D00"
+                android:minWidth="0dp"
+                android:paddingHorizontal="8dp"/>
+
+            <Button
+                android:id="@+id/shortcutButton"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:text="Shortcut"
+                android:textSize="12sp"
+                android:textColor="#1565C0"
+                android:minWidth="0dp"
+                android:paddingHorizontal="8dp"/>
+        </LinearLayout>
 
         <Button
             android:id="@+id/uninstallButton"
             style="@style/Widget.MaterialComponents.Button.TextButton"
             android:layout_width="wrap_content"
-            android:layout_height="36dp"
+            android:layout_height="32dp"
             android:text="Remove"
-            android:textSize="13sp"
+            android:textSize="12sp"
             android:textColor="#E53935"
             android:minWidth="0dp"
-            android:paddingHorizontal="12dp"/>
+            android:paddingHorizontal="8dp"/>
     </LinearLayout>
 </LinearLayout>

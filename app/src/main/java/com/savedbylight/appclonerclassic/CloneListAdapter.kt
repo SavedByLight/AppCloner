@@ -11,6 +11,7 @@ import androidx.recyclerview.widget.RecyclerView
 class CloneListAdapter(
     private var clones: List<CloneInfo>,
     private val onOpen: (CloneInfo) -> Unit,
+    private val onShortcut: (CloneInfo) -> Unit,
     private val onUninstall: (CloneInfo) -> Unit
 ) : RecyclerView.Adapter<CloneListAdapter.VH>() {
 
@@ -19,6 +20,7 @@ class CloneListAdapter(
         val name: TextView = view.findViewById(R.id.cloneName)
         val pkg: TextView = view.findViewById(R.id.clonePackage)
         val openBtn: Button = view.findViewById(R.id.openButton)
+        val shortcutBtn: Button = view.findViewById(R.id.shortcutButton)
         val uninstallBtn: Button = view.findViewById(R.id.uninstallButton)
     }
 
@@ -38,6 +40,7 @@ class CloneListAdapter(
         holder.pkg.text = clone.packageName
         holder.icon.setImageDrawable(clone.icon)
         holder.openBtn.setOnClickListener { onOpen(clone) }
+        holder.shortcutBtn.setOnClickListener { onShortcut(clone) }
         holder.uninstallBtn.setOnClickListener { onUninstall(clone) }
     }
 

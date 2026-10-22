@@ -112,6 +112,7 @@ class MainActivity : AppCompatActivity() {
         cloneAdapter = CloneListAdapter(
             emptyList(),
             onOpen = { clone -> openClone(clone) },
+            onShortcut = { clone -> ShortcutHelper.pinCloneShortcut(this, clone) },
             onUninstall = { clone -> confirmUninstall(clone) }
         )
         appListRecycler.adapter = appAdapter
