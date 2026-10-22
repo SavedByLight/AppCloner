@@ -127,15 +127,10 @@ class CloneProfileManager(context: Context) {
         val pkg = RootShell.quote(packageName)
 
         // Prefer am start --user (monkey does not support --user on many devices).
-        val attempts = listOf(
-            // MAIN + LAUNCHER for the package in that user
+        var last = RootShell.run(
             "am start --user $uid -a android.intent.action.MAIN " +
-                "-c android.intent.category.LAUNCHER -p $pkg",
-            // Resolve component then start explicitly
-            null // placeholder filled below via resolve+start
+                "-c android.intent.category.LAUNCHER -p $pkg"
         )
-
-        var last = RootShell.run(attempts[0])
         Logger.log("ROM clone: launch am-start ${uid}/$packageName -> exit=${last.exitCode}: ${last.output}")
         if (last.success && !looksLikeStartFailure(last.output)) return true
 
@@ -153,8 +148,7 @@ class CloneProfileManager(context: Context) {
             if (last.success && !looksLikeStartFailure(last.output)) return true
         }
 
-        // Last resort: monkey without --user is wrong user; skip.
-        // Some ROMs accept: am start-activity --user
+        // Some ROMs accept am start-activity --user
         last = RootShell.run(
             "am start-activity --user $uid -a android.intent.action.MAIN " +
                 "-c android.intent.category.LAUNCHER -p $pkg"
