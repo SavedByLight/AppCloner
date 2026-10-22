@@ -5,6 +5,8 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.view.Menu
+import android.view.MenuItem
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
@@ -300,17 +302,270 @@ class MainActivity : AppCompatActivity() {
             .sortedWith(compareBy({ it.label.lowercase() }, { it.cloneSuffix }))
     }
 
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_manage_clone_profiles -> {
+                manageRomProfiles()
+                true
+            }
+            R.id.action_view_logs -> {
+                startActivity(Intent(this, LogActivity::class.java))
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
     private fun onAppSelected(app: InstalledApp) {
-        val msg = if (app.existingCloneCount > 0) {
-            "Create another clone of “${app.label}”?\n\nYou already have ${app.existingCloneCount} clone(s). A new one will be named ${app.packageName}.cloneN."
-        } else {
-            "Create a dual instance of “${app.label}”?\n\nThis installs a second independent copy you can log into with a different account."
+        // High/critical apps (Snapchat, banks, …) need the original package + cert.
+        // ROM clone profile = same app in a separate Android user (second account).
+        val report = try {
+            val ai = packageManager.getApplicationInfo(app.packageName, 0)
+            PlayIntegrityDetector.analyze(packageManager, ai)
+        } catch (_: Exception) {
+            PlayIntegrityDetector.RiskReport(PlayIntegrityDetector.RiskLevel.MEDIUM, emptyList())
         }
 
+        val needsRomProfile = report.level == PlayIntegrityDetector.RiskLevel.HIGH ||
+            report.level == PlayIntegrityDetector.RiskLevel.CRITICAL
+
+        if (needsRomProfile) {
+            val reasons = if (report.reasons.isNotEmpty()) {
+                "\n\nWhy: " + report.reasons.take(3).joinToString("; ")
+            } else ""
+            AlertDialog.Builder(this)
+                .setTitle("Clone ${app.label}")
+                .setMessage(
+                    "“${app.label}” checks its real package name and Play Store signature. " +
+                        "A standalone APK clone changes both, so login often shows “unusual activity”.\n\n" +
+                        "Recommended: ROM clone profile — the same official app in a separate " +
+                        "Android user/profile (second account, original app identity).\n" +
+                        "Requires root and a ROM that supports clone profiles." +
+                        reasons
+                )
+                .setPositiveButton("ROM profile") { _, _ -> startRomProfileClone(app) }
+                .setNeutralButton("Standalone anyway") { _, _ ->
+                    AlertDialog.Builder(this)
+                        .setTitle("Standalone may not log in")
+                        .setMessage(
+                            "Continue only for testing. This creates a different app identity " +
+                                "(new package name + new signature), not a bypass of Snapchat’s checks."
+                        )
+                        .setPositiveButton("Continue") { _, _ -> performClone(app) }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        } else {
+            val msg = if (app.existingCloneCount > 0) {
+                "Create another clone of “${app.label}”?\n\nYou already have ${app.existingCloneCount} clone(s)."
+            } else {
+                "Create a dual instance of “${app.label}”?\n\nStandalone APK clone works for many apps. " +
+                    "Use ROM profile if this app later blocks login."
+            }
+            AlertDialog.Builder(this)
+                .setTitle("Clone ${app.label}?")
+                .setMessage(msg)
+                .setPositiveButton("Standalone") { _, _ -> performClone(app) }
+                .setNeutralButton("ROM profile") { _, _ -> startRomProfileClone(app) }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+    }
+
+    private fun startRomProfileClone(app: InstalledApp) {
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                val profiles = withContext(Dispatchers.IO) {
+                    CloneProfileManager(this@MainActivity).listProfiles()
+                }
+                if (profiles.isEmpty()) {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("No ROM clone profile")
+                        .setMessage(
+                            "Create an Android clone profile, then install ${app.label} into it.\n\n" +
+                                "Needs root and a ROM that implements the CLONE user type."
+                        )
+                        .setPositiveButton("Create profile") { _, _ -> createProfileAndClone(app) }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                } else {
+                    val labels = profiles.map { "${it.name} (user ${it.userId})" } +
+                        "Create a new clone profile…"
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Install ${app.label} into profile")
+                        .setItems(labels.toTypedArray()) { _, selected ->
+                            if (selected == profiles.size) createProfileAndClone(app)
+                            else cloneIntoProfile(app, profiles[selected])
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+            } catch (e: Exception) {
+                Logger.log("ROM profile lookup failed: ${e.message}")
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("ROM profile unavailable")
+                    .setMessage(
+                        (e.message ?: "Couldn't list clone profiles") +
+                            "\n\nStock unrooted devices cannot use ROM profiles. " +
+                            "Standalone clone will not keep Snapchat’s original identity."
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun createProfileAndClone(app: InstalledApp) {
+        CoroutineScope(Dispatchers.Main).launch {
+            progressBar.visibility = View.VISIBLE
+            statusText.text = "Creating clone profile…"
+            try {
+                val profile = withContext(Dispatchers.IO) {
+                    CloneProfileManager(this@MainActivity).createProfile()
+                }
+                progressBar.visibility = View.GONE
+                Toast.makeText(
+                    this@MainActivity,
+                    "Created ${profile.name} (user ${profile.userId})",
+                    Toast.LENGTH_LONG
+                ).show()
+                installAndOpenInProfile(app, profile)
+            } catch (e: Exception) {
+                progressBar.visibility = View.GONE
+                Logger.log("ROM profile creation failed: ${e.message}\n${e.stackTraceToString()}")
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Couldn't create profile")
+                    .setMessage(e.message ?: "Unknown error")
+                    .setPositiveButton("View Logs") { _, _ ->
+                        startActivity(Intent(this@MainActivity, LogActivity::class.java))
+                    }
+                    .setNegativeButton("OK", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun cloneIntoProfile(app: InstalledApp, profile: CloneProfile) {
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                installAndOpenInProfile(app, profile)
+            } catch (e: Exception) {
+                Logger.log(
+                    "ROM profile clone failed for ${app.packageName} in user ${profile.userId}: " +
+                        "${e.message}\n${e.stackTraceToString()}"
+                )
+                Toast.makeText(
+                    this@MainActivity,
+                    e.message ?: "Couldn't clone into profile",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    private suspend fun installAndOpenInProfile(app: InstalledApp, profile: CloneProfile) {
+        progressBar.visibility = View.VISIBLE
+        statusText.text = "Installing ${app.label} into ${profile.name}…"
+        try {
+            withContext(Dispatchers.IO) {
+                val manager = CloneProfileManager(this@MainActivity)
+                manager.installApp(app.packageName, profile)
+                manager.launchApp(app.packageName, profile)
+            }
+            statusText.text = "${app.label} → ${profile.name}"
+            Toast.makeText(
+                this@MainActivity,
+                "${app.label} installed in ${profile.name}. Log in with your second account there.",
+                Toast.LENGTH_LONG
+            ).show()
+        } finally {
+            progressBar.visibility = View.GONE
+        }
+    }
+
+    private fun manageRomProfiles() {
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                val profiles = withContext(Dispatchers.IO) {
+                    CloneProfileManager(this@MainActivity).listProfiles()
+                }
+                val labels = listOf("Create new clone profile…") +
+                    profiles.map { "${it.name} (user ${it.userId})" }
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("ROM clone profiles")
+                    .setItems(labels.toTypedArray()) { _, selected ->
+                        if (selected == 0) {
+                            CoroutineScope(Dispatchers.Main).launch {
+                                try {
+                                    val p = withContext(Dispatchers.IO) {
+                                        CloneProfileManager(this@MainActivity).createProfile()
+                                    }
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        "Created ${p.name} (user ${p.userId})",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } catch (e: Exception) {
+                                    Toast.makeText(
+                                        this@MainActivity,
+                                        e.message ?: "Create failed",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        } else {
+                            confirmDeleteProfile(profiles[selected - 1])
+                        }
+                    }
+                    .setNegativeButton("Close", null)
+                    .show()
+            } catch (e: Exception) {
+                Toast.makeText(
+                    this@MainActivity,
+                    e.message ?: "Couldn't manage clone profiles",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    private fun confirmDeleteProfile(profile: CloneProfile) {
         AlertDialog.Builder(this)
-            .setTitle("Clone ${app.label}?")
-            .setMessage(msg)
-            .setPositiveButton("Clone") { _, _ -> performClone(app) }
+            .setTitle("Delete ${profile.name}?")
+            .setMessage(
+                "Removes Android user/profile ${profile.userId} and its app data. " +
+                    "Apps in your main profile are not removed."
+            )
+            .setPositiveButton("Delete") { _, _ ->
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        CloneProfileManager(this@MainActivity).removeProfile(profile)
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                "Deleted ${profile.name}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                this@MainActivity,
+                                e.message ?: "Delete failed",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }
+            }
             .setNegativeButton("Cancel", null)
             .show()
     }
