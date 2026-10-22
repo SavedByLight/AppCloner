@@ -3,32 +3,24 @@ package com.savedbylight.appclonerclassic
 import android.content.Context
 import java.io.File
 import java.nio.charset.StandardCharsets
+import java.util.zip.CRC32
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 /**
  * Patches DEX bytecode at the string level to neuter common anti-clone checks.
  *
- * This is a binary search-and-replace pass over classes.dex. It looks for
- * known string constants used in signature/root/integrity checks and replaces
- * them with harmless alternatives.
+ * Binary search-and-replace over classes*.dex. Replacements MUST be the same
+ * length as the search string or DEX string-pool offsets break.
  *
- * WARNING: This is a BLUNT INSTRUMENT. It may break functionality.
- * Only enable for apps that are already failing with "Something went wrong".
- *
- * What it patches:
- * - "getPackageSignatures" → "getPackageSignaturesX" (breaks reflection lookup)
- * - "getInstallerPackageName" → "getInstallerPackageNameX"
- * - "android.intent.action.MAIN" signatures (some apps check launcher intent)
- * - "su" binary paths in string pools
- * - "ro.debuggable" / "ro.secure" system property names
- * - "SHA1" / "SHA256" (breaks signature hash computation)
- * - "Play Integrity" / "SafetyNet" (breaks API name resolution)
+ * WARNING: Blunt instrument — may break apps. Prefer OFF for heavily
+ * obfuscated targets (e.g. Snapchat); use ROM clone profile instead.
  */
 object SmaliPatcher {
 
-    /** Patches that neuter client-side checks. Each pair is (search, replace).
-     *  Replacements must be SAME LENGTH to avoid breaking DEX offsets. */
+    /** Same-length only. Unequal pairs are rejected at patch time as well. */
     private val PATCHES = listOf(
-        // Same-length only — unequal pairs break DEX string-pool offsets.
         "/system/bin/su" to "/system/bin/sx",
         "/system/xbin/su" to "/system/xbin/sx",
         "/sbin/su" to "/sbin/sx",
@@ -40,21 +32,12 @@ object SmaliPatcher {
         "SHA256withRSA" to "SHA256withRSX",
         "SafetyNetApi" to "SafetyNetApx",
         "play_integrity" to "play_integritx",
-        "integrity_token" to "integrity_tokeX",
-    )
-        "SafetyNetApi"         to "SafetyNetApiX",
-        "AttestationApi"       to "AttestationApiX",
-        // Break Firebase App Check
-        "app_check"            to "app_checkX",
-        "appcheck"             to "appcheckX",
-        // Break common certificate pinning strings
-        "X509TrustManager"     to "X509TrustManagerX",
-        "checkServerTrusted"   to "checkServerTrustedX"
+        "integrity_token" to "integrity_tokeX"
     )
 
     /**
-     * Performs binary string replacement on all .dex files inside the APK.
-     * The APK is a zip, so we extract → patch → re-zip.
+     * Binary string replacement on all .dex files inside [apkFile].
+     * Returns total number of replacements performed.
      */
     fun patchDexStrings(context: Context, apkFile: File): Int {
         var totalPatches = 0
@@ -64,7 +47,6 @@ object SmaliPatcher {
         }
 
         try {
-            // Extract DEX files
             val dexFiles = extractDexFiles(apkFile, workDir)
             Logger.log("SmaliPatcher: found ${dexFiles.size} DEX file(s)")
 
@@ -87,15 +69,12 @@ object SmaliPatcher {
 
     private fun extractDexFiles(apkFile: File, workDir: File): List<File> {
         val dexFiles = mutableListOf<File>()
-        java.util.zip.ZipFile(apkFile).use { zip ->
+        ZipFile(apkFile).use { zip ->
             zip.entries().asSequence().forEach { entry ->
-                if (entry.name.endsWith(".dex")) {
-                    val out = File(workDir, entry.name)
-                    out.parentFile?.mkdirs()
+                if (entry.name.endsWith(".dex") && !entry.isDirectory) {
+                    val out = File(workDir, entry.name.substringAfterLast('/'))
                     zip.getInputStream(entry).use { input ->
-                        out.outputStream().use { output ->
-                            input.copyTo(output)
-                        }
+                        out.outputStream().use { output -> input.copyTo(output) }
                     }
                     dexFiles.add(out)
                 }
@@ -161,22 +140,25 @@ object SmaliPatcher {
 
     private fun repackDexFiles(apkFile: File, dexFiles: List<File>) {
         val tempOut = File.createTempFile("dex_patched", ".apk", apkFile.parentFile)
-        java.util.zip.ZipFile(apkFile).use { zipIn ->
-            java.util.zip.ZipOutputStream(tempOut.outputStream()).use { zipOut ->
+        ZipFile(apkFile).use { zipIn ->
+            ZipOutputStream(tempOut.outputStream()).use { zipOut ->
                 val dexNames = dexFiles.map { it.name }.toSet()
                 zipIn.entries().asSequence().forEach { entry ->
-                    if (dexNames.contains(entry.name)) return@forEach
+                    if (entry.isDirectory) return@forEach
+                    val simpleName = entry.name.substringAfterLast('/')
+                    if (simpleName in dexNames || entry.name in dexNames) return@forEach
+
                     val bytes = zipIn.getInputStream(entry).use { it.readBytes() }
-                    val outEntry = java.util.zip.ZipEntry(entry.name)
+                    val outEntry = ZipEntry(entry.name)
                     val store = entry.name == "resources.arsc" ||
-                        entry.method == java.util.zip.ZipEntry.STORED
+                        entry.method == ZipEntry.STORED
                     if (store) {
-                        outEntry.method = java.util.zip.ZipEntry.STORED
+                        outEntry.method = ZipEntry.STORED
                         outEntry.size = bytes.size.toLong()
                         outEntry.compressedSize = bytes.size.toLong()
-                        outEntry.crc = java.util.zip.CRC32().apply { update(bytes) }.value
+                        outEntry.crc = CRC32().apply { update(bytes) }.value
                     } else {
-                        outEntry.method = java.util.zip.ZipEntry.DEFLATED
+                        outEntry.method = ZipEntry.DEFLATED
                     }
                     zipOut.putNextEntry(outEntry)
                     zipOut.write(bytes)
@@ -184,8 +166,8 @@ object SmaliPatcher {
                 }
                 dexFiles.forEach { dex ->
                     val bytes = dex.readBytes()
-                    val outEntry = java.util.zip.ZipEntry(dex.name)
-                    outEntry.method = java.util.zip.ZipEntry.DEFLATED
+                    val outEntry = ZipEntry(dex.name)
+                    outEntry.method = ZipEntry.DEFLATED
                     zipOut.putNextEntry(outEntry)
                     zipOut.write(bytes)
                     zipOut.closeEntry()
