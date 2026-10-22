@@ -475,17 +475,19 @@ class MainActivity : AppCompatActivity() {
         progressBar.visibility = View.VISIBLE
         statusText.text = "Installing ${app.label} into ${profile.name}…"
         try {
-            withContext(Dispatchers.IO) {
+            val launched = withContext(Dispatchers.IO) {
                 val manager = CloneProfileManager(this@MainActivity)
                 manager.installApp(app.packageName, profile)
                 manager.launchApp(app.packageName, profile)
             }
             statusText.text = "${app.label} → ${profile.name}"
-            Toast.makeText(
-                this@MainActivity,
-                "${app.label} installed in ${profile.name}. Log in with your second account there.",
-                Toast.LENGTH_LONG
-            ).show()
+            val msg = if (launched) {
+                "${app.label} installed in ${profile.name}. Log in with your second account there."
+            } else {
+                "${app.label} is installed in ${profile.name}. " +
+                    "Open it from the profile/launcher if it did not start automatically."
+            }
+            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
         } finally {
             progressBar.visibility = View.GONE
         }
