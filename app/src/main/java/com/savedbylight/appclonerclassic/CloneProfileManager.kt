@@ -117,6 +117,49 @@ class CloneProfileManager(context: Context) {
                 "Android couldn't install $packageName into ${profile.name}: ${result.output.ifBlank { "pm install-existing failed" }}"
             )
         }
+        registerInstalledApp(packageName, profile.userId)
+    }
+
+    /**
+     * Apps available in clone profiles: registry + live `pm list packages --user`
+     * so installs done before tracking still appear in My Clones.
+     */
+    fun listInstalledApps(): List<Pair<String, Int>> {
+        val found = linkedSetOf<Pair<String, Int>>()
+        preferences.getStringSet(KEY_PROFILE_APPS, emptySet()).orEmpty().forEach { raw ->
+            val split = raw.lastIndexOf('|')
+            if (split <= 0) return@forEach
+            val pkg = raw.substring(0, split)
+            val uid = raw.substring(split + 1).toIntOrNull() ?: return@forEach
+            if (uid > 0) found.add(pkg to uid)
+        }
+        // Scan each known clone profile for packages also present on user 0
+        // (dual-install). Skip the profile's own packages we don't care about.
+        runCatching {
+            listProfiles().forEach { profile ->
+                val result = RootShell.run("pm list packages --user ${profile.userId}")
+                if (!result.success) return@forEach
+                result.output.lineSequence()
+                    .map { it.removePrefix("package:").trim() }
+                    .filter { it.isNotEmpty() && it.contains('.') }
+                    .forEach { pkg -> found.add(pkg to profile.userId) }
+            }
+        }
+        return found.sortedWith(compareBy({ it.first }, { it.second }))
+    }
+
+    fun unregisterInstalledApp(packageName: String, userId: Int) {
+        val key = "$packageName|$userId"
+        val set = preferences.getStringSet(KEY_PROFILE_APPS, mutableSetOf()).orEmpty().toMutableSet()
+        set.remove(key)
+        preferences.edit().putStringSet(KEY_PROFILE_APPS, set).apply()
+    }
+
+    private fun registerInstalledApp(packageName: String, userId: Int) {
+        val key = "$packageName|$userId"
+        val set = preferences.getStringSet(KEY_PROFILE_APPS, mutableSetOf()).orEmpty().toMutableSet()
+        set.add(key)
+        preferences.edit().putStringSet(KEY_PROFILE_APPS, set).apply()
     }
 
     fun launchApp(packageName: String, profile: CloneProfile): Boolean {
@@ -229,6 +272,7 @@ class CloneProfileManager(context: Context) {
 
     companion object {
         private const val KEY_TRACKED_PROFILES = "tracked_profile_entries"
+        private const val KEY_PROFILE_APPS = "profile_installed_apps"
         private val PACKAGE_NAME = Regex("[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)+")
     }
 }

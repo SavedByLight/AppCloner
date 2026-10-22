@@ -275,7 +275,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadExistingClones(): List<CloneInfo> {
         val pm = packageManager
-        return pm.getInstalledApplications(0)
+        val standalone = pm.getInstalledApplications(0)
             .mapNotNull { ai ->
                 val pkg = ai.packageName
                 if (!CloneUtils.isStealthClone(this, pkg)) return@mapNotNull null
@@ -299,6 +299,37 @@ class MainActivity : AppCompatActivity() {
                     null
                 }
             }
+
+        // ROM profile installs share the original package name — they do not appear
+        // as separate packages in the main user's drawer. List them from our registry.
+        val romClones = try {
+            val manager = CloneProfileManager(this)
+            val mainPkgs = pm.getInstalledApplications(0).map { it.packageName }.toSet()
+            manager.listInstalledApps().mapNotNull { (pkg, userId) ->
+                // Only dual-installed user apps that exist on the main user too
+                if (pkg !in mainPkgs) return@mapNotNull null
+                if (pkg == packageName) return@mapNotNull null
+                if (isExcludedFromCloning(pkg)) return@mapNotNull null
+                try {
+                    val ai = pm.getApplicationInfo(pkg, 0)
+                    if (ai.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0) return@mapNotNull null
+                    CloneInfo(
+                        label = pm.getApplicationLabel(ai).toString(),
+                        packageName = pkg,
+                        basePackageName = pkg,
+                        cloneSuffix = "profile $userId",
+                        icon = pm.getApplicationIcon(ai),
+                        profileUserId = userId
+                    )
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        return (standalone + romClones)
             .sortedWith(compareBy({ it.label.lowercase() }, { it.cloneSuffix }))
     }
 
@@ -481,13 +512,30 @@ class MainActivity : AppCompatActivity() {
                 manager.launchApp(app.packageName, profile)
             }
             statusText.text = "${app.label} → ${profile.name}"
-            val msg = if (launched) {
-                "${app.label} installed in ${profile.name}. Log in with your second account there."
-            } else {
-                "${app.label} is installed in ${profile.name}. " +
-                    "Open it from the profile/launcher if it did not start automatically."
-            }
-            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+            refreshClonesOnly()
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("${app.label} ready in ${profile.name}")
+                .setMessage(
+                    "Installed as the same official app in Android user ${profile.userId}.\n\n" +
+                        "It will not appear as a second icon in your main app drawer — " +
+                        "Android only shows packages for the current user.\n\n" +
+                        "Open it from App Cloner → My Clones (listed as “profile ${profile.userId}”), " +
+                        "or use your ROM’s dual-app / profile switcher."
+                )
+                .setPositiveButton("Open now") { _, _ ->
+                    openClone(
+                        CloneInfo(
+                            label = app.label,
+                            packageName = app.packageName,
+                            basePackageName = app.packageName,
+                            cloneSuffix = "profile ${profile.userId}",
+                            icon = packageManager.getApplicationIcon(app.packageName),
+                            profileUserId = profile.userId
+                        )
+                    )
+                }
+                .setNegativeButton("OK", null)
+                .show()
         } finally {
             progressBar.visibility = View.GONE
         }
@@ -615,6 +663,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openClone(clone: CloneInfo) {
+        val userId = clone.profileUserId
+        if (userId != null) {
+            CoroutineScope(Dispatchers.Main).launch {
+                val ok = withContext(Dispatchers.IO) {
+                    try {
+                        CloneProfileManager(this@MainActivity).launchApp(
+                            clone.packageName,
+                            CloneProfile(userId, "profile $userId", true)
+                        )
+                    } catch (e: Exception) {
+                        Logger.log("Open ROM profile clone failed: ${e.message}")
+                        false
+                    }
+                }
+                if (!ok) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Could not start ${clone.label} in profile $userId. " +
+                            "Switch to that profile in system settings if your ROM has a dual-app switcher.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+            return
+        }
         val launch = packageManager.getLaunchIntentForPackage(clone.packageName)
         if (launch != null) {
             startActivity(launch)
@@ -624,9 +697,49 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun confirmUninstall(clone: CloneInfo) {
+        val userId = clone.profileUserId
+        if (userId != null) {
+            AlertDialog.Builder(this)
+                .setTitle("Remove profile install?")
+                .setMessage(
+                    "Remove “${clone.label}” from Android user $userId?\n\n" +
+                        "The original app in your main profile is not removed."
+                )
+                .setPositiveButton("Remove") { _, _ ->
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            RootShell.run("pm uninstall --user $userId ${RootShell.quote(clone.packageName)}")
+                            CloneProfileManager(this@MainActivity)
+                                .unregisterInstalledApp(clone.packageName, userId)
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "Removed from profile $userId",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                refreshClonesOnly()
+                            }
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    e.message ?: "Remove failed",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
         AlertDialog.Builder(this)
             .setTitle("Remove clone?")
-            .setMessage("Uninstall “${clone.label} (${clone.cloneSuffix})”?\n\n${clone.packageName}\n\nThis only removes the clone, not the original app.")
+            .setMessage(
+                "Uninstall “${clone.label} (${clone.cloneSuffix})”?\n\n${clone.packageName}\n\n" +
+                    "This only removes the clone, not the original app."
+            )
             .setPositiveButton("Uninstall") { _, _ ->
                 try {
                     val intent = Intent(Intent.ACTION_DELETE).apply {

@@ -15,5 +15,9 @@ data class CloneInfo(
     val packageName: String,
     val basePackageName: String,
     val cloneSuffix: String,
-    val icon: Drawable
-)
+    val icon: Drawable,
+    /** Non-null when this entry is a ROM clone-profile install (same package, other user). */
+    val profileUserId: Int? = null
+) {
+    val isRomProfileClone: Boolean get() = profileUserId != null
+}
