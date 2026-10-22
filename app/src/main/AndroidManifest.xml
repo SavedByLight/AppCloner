@@ -1,19 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:requestLegacyExternalStorage="true"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="Dual App Cloner"
+        android:label="AppCloner"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppClonerClassic">
+        android:theme="@style/Theme.AppCloner">
 
         <activity
             android:name=".MainActivity"
@@ -26,24 +24,15 @@
 
         <activity
             android:name=".LogActivity"
-            android:exported="false"
-            android:launchMode="singleTop"
-            android:excludeFromRecents="true" />
+            android:exported="false" />
 
-        <!-- Receives PackageInstaller session status. exported=false is fine
-             because the PendingIntent is created by this same app; the system
-             still delivers it. -->
-        <receiver
-            android:name=".InstallResultReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.savedbylight.appclonerclassic.INSTALL_COMPLETE" />
-            </intent-filter>
-        </receiver>
+        <activity
+            android:name=".FirebaseConfigActivity"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="com.savedbylight.appclonerclassic.fileprovider"
+            android:authorities="com.savedbylight.appcloner.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data
