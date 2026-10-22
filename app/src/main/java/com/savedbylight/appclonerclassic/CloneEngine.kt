@@ -255,6 +255,11 @@ class CloneEngine(private val context: Context) {
                 Logger.log("  DEX patcher: $patchCount string replacements")
             }
 
+            // Android 11+ requires resources.arsc STORED + 4-byte aligned.
+            // ZIP rewrites (manifest, DEX patch) often lose both; fix before sign.
+            Logger.log("  Zip-aligning (resources.arsc 4-byte, .so 4096)...")
+            ZipAligner.alignInPlace(tempUnsigned)
+
             Logger.log("  Signing ${tempUnsigned.name} -> ${destination.name} (v1/v2/v3, minSdk=26)")
             signApkBinary(tempUnsigned, destination)
             Logger.log("  Signed successfully: ${destination.name} (${destination.length()} bytes)")
@@ -301,12 +306,18 @@ class CloneEngine(private val context: Context) {
                         }
 
                         val outEntry = ZipEntry(entry.name)
-                        if (entry.method == ZipEntry.STORED) {
+                        // resources.arsc must always be STORED (Android R+).
+                        val forceStored = entry.name == "resources.arsc" ||
+                            entry.method == ZipEntry.STORED
+                        if (forceStored) {
                             outEntry.method = ZipEntry.STORED
                             outEntry.size = outBytes.size.toLong()
                             outEntry.compressedSize = outBytes.size.toLong()
                             outEntry.crc = CRC32().apply { update(outBytes) }.value
-                            if (entry.name.endsWith(".so") || entry.name.contains("lib/")) {
+                            if (entry.name == "resources.arsc" ||
+                                entry.name.endsWith(".so") ||
+                                entry.name.contains("lib/")
+                            ) {
                                 pageAligned++
                             }
                         } else {

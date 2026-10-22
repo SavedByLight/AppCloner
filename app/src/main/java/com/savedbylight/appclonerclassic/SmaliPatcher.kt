@@ -170,18 +170,30 @@ object SmaliPatcher {
         java.util.zip.ZipFile(apkFile).use { zipIn ->
             java.util.zip.ZipOutputStream(tempOut.outputStream()).use { zipOut ->
                 val dexNames = dexFiles.map { it.name }.toSet()
-                // Copy non-DEX entries
                 zipIn.entries().asSequence().forEach { entry ->
-                    if (!dexNames.contains(entry.name)) {
-                        zipOut.putNextEntry(java.util.zip.ZipEntry(entry.name))
-                        zipIn.getInputStream(entry).use { it.copyTo(zipOut) }
-                        zipOut.closeEntry()
+                    if (dexNames.contains(entry.name)) return@forEach
+                    val bytes = zipIn.getInputStream(entry).use { it.readBytes() }
+                    val outEntry = java.util.zip.ZipEntry(entry.name)
+                    val store = entry.name == "resources.arsc" ||
+                        entry.method == java.util.zip.ZipEntry.STORED
+                    if (store) {
+                        outEntry.method = java.util.zip.ZipEntry.STORED
+                        outEntry.size = bytes.size.toLong()
+                        outEntry.compressedSize = bytes.size.toLong()
+                        outEntry.crc = java.util.zip.CRC32().apply { update(bytes) }.value
+                    } else {
+                        outEntry.method = java.util.zip.ZipEntry.DEFLATED
                     }
+                    zipOut.putNextEntry(outEntry)
+                    zipOut.write(bytes)
+                    zipOut.closeEntry()
                 }
-                // Write patched DEX entries
                 dexFiles.forEach { dex ->
-                    zipOut.putNextEntry(java.util.zip.ZipEntry(dex.name))
-                    dex.inputStream().use { it.copyTo(zipOut) }
+                    val bytes = dex.readBytes()
+                    val outEntry = java.util.zip.ZipEntry(dex.name)
+                    outEntry.method = java.util.zip.ZipEntry.DEFLATED
+                    zipOut.putNextEntry(outEntry)
+                    zipOut.write(bytes)
                     zipOut.closeEntry()
                 }
             }
