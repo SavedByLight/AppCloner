@@ -156,19 +156,26 @@ class CloneProfileManager(context: Context) {
     }
 
     private fun discoverCloneProfiles(dump: String): List<Pair<Int, String>> {
-        val matches = Regex("(?m)^\\s*UserInfo\\{(\\d+):([^:}]+):[^}]*}.*$").findAll(dump).toList()
+        // Use raw string and escape braces. An unescaped '}' after [^}]* caused
+        // PatternSyntaxException on device ("Syntax error in regexp pattern near index 39").
+        val userInfo = Regex("""UserInfo\{(\d+):([^:}]+):[^\}]*\}""")
+        val matches = userInfo.findAll(dump).toList()
         return matches.mapIndexedNotNull { index, match ->
-            val start = match.range.last + 1
-            val end = matches.getOrNull(index + 1)?.range?.first ?: dump.length
-            val block = dump.substring(start.coerceAtMost(dump.length), end.coerceAtLeast(start).coerceAtMost(dump.length))
+            val startIdx = match.range.last + 1
+            val endIdx = matches.getOrNull(index + 1)?.range?.first ?: dump.length
+            val block = dump.substring(
+                startIdx.coerceAtMost(dump.length),
+                endIdx.coerceAtLeast(startIdx).coerceAtMost(dump.length)
+            )
             val name = match.groupValues[2].trim().ifBlank { "Clone profile" }
             val isProfile = match.value.contains("isProfile", ignoreCase = true) ||
                 block.contains("isProfile", ignoreCase = true)
             val isClone = block.contains("android.os.usertype.profile.CLONE", ignoreCase = true) ||
                 block.contains("profile.CLONE", ignoreCase = true) ||
-                (isProfile && name.contains("clone", ignoreCase = true))
+                (isProfile && name.contains("clone", ignoreCase = true)) ||
+                name.contains("App Clone", ignoreCase = true)
             val id = match.groupValues[1].toIntOrNull()
-            if (isClone && id != null) id to name else null
+            if (isClone && id != null && id != 0) id to name else null
         }
     }
 
