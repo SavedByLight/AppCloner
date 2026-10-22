@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace 'com.savedbylight.appcloner'
+    namespace 'com.savedbylight.appclonerclassic'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.savedbylight.appcloner"
+        applicationId "com.savedbylight.appclonerclassic"
         minSdk 24
         targetSdk 34
         versionCode 2
