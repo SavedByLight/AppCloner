@@ -37,7 +37,12 @@ class CloneEngine(private val context: Context) {
     fun cloneApp(app: InstalledApp): List<File> {
         val pkgName = app.packageName
         val targetPackageName = "$pkgName.clone1"
-        val appInfo = context.packageManager.getApplicationInfo(pkgName, 0)
+        return cloneApp(app, targetPackageName)
+    }
+
+    /** Clone with an explicit target package (used by standalone multi-instance flow). */
+    fun cloneApp(app: InstalledApp, targetPackageName: String): List<File> {
+        val appInfo = context.packageManager.getApplicationInfo(app.packageName, 0)
         return cloneApp(appInfo, targetPackageName)
     }
 
