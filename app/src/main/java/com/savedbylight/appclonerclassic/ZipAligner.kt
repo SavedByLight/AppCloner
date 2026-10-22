@@ -2,29 +2,21 @@ package com.savedbylight.appclonerclassic
 
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.util.zip.CRC32
+import java.util.zip.Inflater
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
-import java.util.zip.ZipOutputStream
 
 /**
- * Re-writes an APK so that STORED entries have their payload at a required
- * alignment. Android 11+ (targetSdk >= 30) requires resources.arsc to be
- * STORED and aligned on a 4-byte boundary; native libraries are typically
- * page-aligned (4096).
+ * Rebuilds an APK so STORED entry payloads sit on aligned file offsets.
  *
- * Approach: rebuild the zip with ZipOutputStream is insufficient for absolute
- * alignment because we cannot inject padding between the local header and
- * the data without controlling the extra field length relative to the current
- * file offset. So we write a raw ZIP structure manually for STORED entries.
+ * Android 11+ requires resources.arsc to be STORED and 4-byte aligned.
+ * Native libraries (.so) should be page-aligned (4096).
  *
- * For simplicity and reliability we:
- * 1. Read all entries into memory (clone APKs are large but already buffered).
- * 2. Write local headers + data with padding in the extra field so data starts
- *    at an aligned file offset.
- * 3. Write central directory and EOCD.
+ * DEFLATED entries are copied with their original compressed payload whenever
+ * possible so we do not change compression or drop data (a previous pass that
+ * re-deflated everything could shrink a ~107MB base to ~59MB and break classes).
  */
 object ZipAligner {
 
@@ -32,87 +24,103 @@ object ZipAligner {
     private const val CENTRAL_HEADER = 0x02014b50
     private const val EOCD = 0x06054b50
 
-    data class Entry(
+    private class Item(
         val name: String,
-        val data: ByteArray,
-        val stored: Boolean,
-        val time: Int = 0,
-        val date: Int = 0
+        val uncompressed: ByteArray,
+        val compressed: ByteArray?, // null => write as STORED from uncompressed
+        val method: Int,            // 0 STORED, 8 DEFLATED
+        val crc: Long
     )
 
+    fun alignInPlace(apk: File, defaultAlignment: Int = 4, soAlignment: Int = 4096) {
+        val tmp = File(apk.parentFile, apk.name + ".aligned")
+        try {
+            align(apk, tmp, defaultAlignment, soAlignment)
+            if (!tmp.exists() || tmp.length() < 1000L) {
+                Logger.log("ZipAligner: output too small (${tmp.length()} bytes) — keeping original")
+                return
+            }
+            // Sanity: aligned APK should not be dramatically smaller than input
+            // unless input was mostly STORED that we still store. If we lost
+            // more than 25% of bytes, refuse to replace (protects against bugs).
+            if (tmp.length() < apk.length() * 75 / 100) {
+                Logger.log(
+                    "ZipAligner: refusing shrink ${apk.length()} → ${tmp.length()} bytes — keeping original"
+                )
+                return
+            }
+            tmp.copyTo(apk, overwrite = true)
+            Logger.log("ZipAligner: aligned ${apk.name} (${apk.length()} bytes)")
+        } finally {
+            if (tmp.exists()) tmp.delete()
+        }
+    }
+
     fun align(input: File, output: File, defaultAlignment: Int = 4, soAlignment: Int = 4096) {
-        val entries = mutableListOf<Entry>()
+        val items = mutableListOf<Item>()
+
         ZipFile(input).use { zf ->
+            // Map name -> raw compressed payload by scanning local headers
+            val compressedByName = readCompressedPayloads(input)
+
             zf.entries().asSequence().forEach { e ->
-                val bytes = zf.getInputStream(e).use { it.readBytes() }
-                val mustStore = e.name == "resources.arsc" ||
-                    e.method == ZipEntry.STORED ||
-                    e.name.endsWith(".so")
-                entries.add(Entry(e.name, bytes, mustStore, 0, 0))
-            }
-        }
+                if (e.isDirectory) return@forEach
+                val uncompressed = zf.getInputStream(e).use { it.readBytes() }
+                val forceStored = e.name == "resources.arsc" ||
+                    e.name.endsWith(".so") ||
+                    e.name.startsWith("lib/")
 
-        // Compress DEFLATED entries first so we know sizes
-        data class Prepared(
-            val name: String,
-            val payload: ByteArray, // compressed or raw
-            val uncompressed: ByteArray,
-            val stored: Boolean,
-            val crc: Long,
-            val time: Int,
-            val date: Int
-        )
-
-        val prepared = entries.map { e ->
-            val crc = CRC32().apply { update(e.data) }.value
-            if (e.stored) {
-                Prepared(e.name, e.data, e.data, true, crc, e.time, e.date)
-            } else {
-                val baos = ByteArrayOutputStream()
-                java.util.zip.Deflater(java.util.zip.Deflater.DEFAULT_COMPRESSION, true).let { def ->
-                    // Use ZipOutputStream for a single entry to get proper deflate
+                val crc = CRC32().apply { update(uncompressed) }.value
+                if (forceStored || e.method == ZipEntry.STORED) {
+                    items.add(Item(e.name, uncompressed, null, ZipEntry.STORED, crc))
+                } else {
+                    val raw = compressedByName[e.name]
+                    if (raw != null && raw.isNotEmpty()) {
+                        items.add(Item(e.name, uncompressed, raw, ZipEntry.DEFLATED, crc))
+                    } else {
+                        // Fallback: re-deflate
+                        items.add(Item(e.name, uncompressed, deflate(uncompressed), ZipEntry.DEFLATED, crc))
+                    }
                 }
-                // Simpler: use ZipOutputStream to compress one entry
-                val compressed = deflate(e.data)
-                Prepared(e.name, compressed, e.data, false, crc, e.time, e.date)
             }
         }
+
+        Logger.log("ZipAligner: rewriting ${items.size} entries")
 
         RandomAccessFile(output, "rw").use { raf ->
             raf.setLength(0)
-            val centralRecords = mutableListOf<ByteArray>()
-            val localOffsets = mutableListOf<Long>()
+            val centralRecords = ArrayList<ByteArray>(items.size)
+            val localOffsets = ArrayList<Long>(items.size)
 
-            for (p in prepared) {
+            for (p in items) {
                 val nameBytes = p.name.toByteArray(Charsets.UTF_8)
+                val payload = if (p.method == ZipEntry.STORED) p.uncompressed else (p.compressed ?: p.uncompressed)
                 val align = when {
                     p.name == "resources.arsc" -> 4
                     p.name.endsWith(".so") || p.name.startsWith("lib/") -> soAlignment
-                    p.stored -> defaultAlignment
+                    p.method == ZipEntry.STORED -> defaultAlignment
                     else -> 1
                 }
 
-                // Local header is 30 + nameLen + extraLen; data follows.
-                // We choose extraLen so that (currentPos + 30 + nameLen + extraLen) % align == 0
                 val headerBase = 30 + nameBytes.size
                 val posBefore = raf.filePointer
                 var extraLen = 0
-                if (align > 1 && p.stored) {
-                    val dataStartUnpadded = posBefore + headerBase
-                    val mis = (dataStartUnpadded % align).toInt()
+                if (align > 1 && p.method == ZipEntry.STORED) {
+                    val dataStart = posBefore + headerBase
+                    val mis = (dataStart % align).toInt()
                     if (mis != 0) extraLen = align - mis
                 }
                 val extra = ByteArray(extraLen)
 
                 val local = ByteArrayOutputStream()
                 writeInt(local, LOCAL_HEADER)
-                writeShort(local, 20) // version needed
-                writeShort(local, 0) // flags
-                writeShort(local, if (p.stored) 0 else 8) // method
-                writeShort(local, p.time)
-                writeShort(local, p.date)
+                writeShort(local, 20)
+                writeShort(local, 0)
+                writeShort(local, if (p.method == ZipEntry.STORED) 0 else 8)
+                writeShort(local, 0)
+                writeShort(local, 0)
                 writeInt(local, p.crc.toInt())
-                writeInt(local, p.payload.size)
+                writeInt(local, payload.size)
                 writeInt(local, p.uncompressed.size)
                 writeShort(local, nameBytes.size)
                 writeShort(local, extra.size)
@@ -121,26 +129,25 @@ object ZipAligner {
 
                 localOffsets.add(raf.filePointer)
                 raf.write(local.toByteArray())
-                raf.write(p.payload)
+                raf.write(payload)
 
-                // Central directory record
                 val central = ByteArrayOutputStream()
                 writeInt(central, CENTRAL_HEADER)
-                writeShort(central, 20) // version made by
-                writeShort(central, 20) // version needed
-                writeShort(central, 0) // flags
-                writeShort(central, if (p.stored) 0 else 8)
-                writeShort(central, p.time)
-                writeShort(central, p.date)
+                writeShort(central, 20)
+                writeShort(central, 20)
+                writeShort(central, 0)
+                writeShort(central, if (p.method == ZipEntry.STORED) 0 else 8)
+                writeShort(central, 0)
+                writeShort(central, 0)
                 writeInt(central, p.crc.toInt())
-                writeInt(central, p.payload.size)
+                writeInt(central, payload.size)
                 writeInt(central, p.uncompressed.size)
                 writeShort(central, nameBytes.size)
-                writeShort(central, 0) // extra
-                writeShort(central, 0) // comment
-                writeShort(central, 0) // disk start
-                writeShort(central, 0) // internal attrs
-                writeInt(central, 0) // external attrs
+                writeShort(central, 0)
+                writeShort(central, 0)
+                writeShort(central, 0)
+                writeShort(central, 0)
+                writeInt(central, 0)
                 writeInt(central, localOffsets.last().toInt())
                 central.write(nameBytes)
                 centralRecords.add(central.toByteArray())
@@ -150,13 +157,12 @@ object ZipAligner {
             for (c in centralRecords) raf.write(c)
             val cdSize = raf.filePointer - cdStart
 
-            // EOCD
             val eocd = ByteArrayOutputStream()
             writeInt(eocd, EOCD)
             writeShort(eocd, 0)
             writeShort(eocd, 0)
-            writeShort(eocd, prepared.size)
-            writeShort(eocd, prepared.size)
+            writeShort(eocd, items.size)
+            writeShort(eocd, items.size)
             writeInt(eocd, cdSize.toInt())
             writeInt(eocd, cdStart.toInt())
             writeShort(eocd, 0)
@@ -164,15 +170,38 @@ object ZipAligner {
         }
     }
 
-    /** Align in place. */
-    fun alignInPlace(apk: File, defaultAlignment: Int = 4, soAlignment: Int = 4096) {
-        val tmp = File(apk.parentFile, apk.name + ".aligned")
-        try {
-            align(apk, tmp, defaultAlignment, soAlignment)
-            tmp.copyTo(apk, overwrite = true)
-        } finally {
-            if (tmp.exists()) tmp.delete()
+    /**
+     * Walk local file headers and return name -> compressed payload bytes
+     * (the exact bytes stored on disk for that entry).
+     */
+    private fun readCompressedPayloads(apk: File): Map<String, ByteArray> {
+        val map = HashMap<String, ByteArray>()
+        RandomAccessFile(apk, "r").use { raf ->
+            while (raf.filePointer < raf.length() - 4) {
+                val sig = readInt(raf)
+                if (sig != LOCAL_HEADER) break
+                raf.skipBytes(2 + 2) // ver, flags
+                val method = readShort(raf)
+                raf.skipBytes(2 + 2) // time, date
+                raf.skipBytes(4) // crc
+                val compSize = readInt(raf).toLong() and 0xffffffffL
+                val uncompSize = readInt(raf).toLong() and 0xffffffffL
+                val nameLen = readShort(raf)
+                val extraLen = readShort(raf)
+                val nameBytes = ByteArray(nameLen)
+                raf.readFully(nameBytes)
+                raf.skipBytes(extraLen)
+                val name = String(nameBytes, Charsets.UTF_8)
+                // Skip data descriptors / encrypted — assume standard APKs
+                val payload = ByteArray(compSize.toInt().coerceAtLeast(0))
+                if (payload.isNotEmpty()) raf.readFully(payload)
+                // If STORED, compressed size == uncompressed; still record
+                map[name] = payload
+                // Guard against runaway
+                if (map.size > 100_000) break
+            }
         }
+        return map
     }
 
     private fun deflate(data: ByteArray): ByteArray {
@@ -199,5 +228,19 @@ object ZipAligner {
         out.write((v shr 8) and 0xff)
         out.write((v shr 16) and 0xff)
         out.write((v shr 24) and 0xff)
+    }
+
+    private fun readShort(raf: RandomAccessFile): Int {
+        val b1 = raf.read()
+        val b2 = raf.read()
+        return (b1 and 0xff) or ((b2 and 0xff) shl 8)
+    }
+
+    private fun readInt(raf: RandomAccessFile): Int {
+        val b1 = raf.read()
+        val b2 = raf.read()
+        val b3 = raf.read()
+        val b4 = raf.read()
+        return (b1 and 0xff) or ((b2 and 0xff) shl 8) or ((b3 and 0xff) shl 16) or ((b4 and 0xff) shl 24)
     }
 }

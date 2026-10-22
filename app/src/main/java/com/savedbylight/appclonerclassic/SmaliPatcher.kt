@@ -28,26 +28,20 @@ object SmaliPatcher {
     /** Patches that neuter client-side checks. Each pair is (search, replace).
      *  Replacements must be SAME LENGTH to avoid breaking DEX offsets. */
     private val PATCHES = listOf(
-        // Break PackageManager signature reflection
-        "getPackageSignatures" to "getPackageSignaturesX",
-        "getPackageSignature"  to "getPackageSignatureX",
-        // Break installer check
-        "getInstallerPackageName" to "getInstallerPackageNameX",
-        // Break root detection string lookups
-        "/system/bin/su"       to "/system/bin/sx",
-        "/system/xbin/su"      to "/system/xbin/sx",
-        "/sbin/su"             to "/sbin/sx",
-        "/su/bin/su"           to "/su/bin/sx",
-        // Break system property checks
-        "ro.debuggable"        to "ro.debuggableX",
-        "ro.secure"            to "ro.secureX",
-        // Break hash algorithms used for signature comparison
-        "SHA1withRSA"          to "SHA1withRSAX",
-        "SHA256withRSA"        to "SHA256withRSAX",
-        // Break Play Integrity API name resolution
-        "play_integrity"       to "play_integrityX",
-        "integrity_token"      to "integrity_tokenX",
-        // Break SafetyNet (legacy)
+        // Same-length only — unequal pairs break DEX string-pool offsets.
+        "/system/bin/su" to "/system/bin/sx",
+        "/system/xbin/su" to "/system/xbin/sx",
+        "/sbin/su" to "/sbin/sx",
+        "/su/bin/su" to "/su/bin/sx",
+        "getPackageSignatures" to "getPackageSignature_",
+        "getInstallerPackageName" to "getInstallerPackageNam_",
+        "ro.debuggable" to "ro.debuggablx",
+        "SHA1withRSA" to "SHA1withRSX",
+        "SHA256withRSA" to "SHA256withRSX",
+        "SafetyNetApi" to "SafetyNetApx",
+        "play_integrity" to "play_integritx",
+        "integrity_token" to "integrity_tokeX",
+    )
         "SafetyNetApi"         to "SafetyNetApiX",
         "AttestationApi"       to "AttestationApiX",
         // Break Firebase App Check
