@@ -4,51 +4,59 @@
     android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#FAFAFA">
+    android:background="?attr/colorSurface"
+    android:fitsSystemWindows="true">
 
-    <androidx.appcompat.widget.Toolbar
+    <com.google.android.material.appbar.MaterialToolbar
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
-        android:background="?attr/colorPrimary"
-        android:theme="@style/ThemeOverlay.AppCompat.ActionBar"
-        app:popupTheme="@style/ToolbarPopupMenu"
-        app:title="@string/app_name"/>
+        android:background="?attr/colorSurface"
+        app:title="@string/app_name"
+        app:titleTextColor="?attr/colorOnSurface"
+        app:navigationIconTint="?attr/colorOnSurface"/>
 
     <TextView
         android:id="@+id/statusText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingHorizontal="16dp"
-        android:paddingTop="12dp"
+        android:paddingTop="8dp"
         android:paddingBottom="4dp"
         android:textSize="13sp"
-        android:textColor="#616161"
+        android:textColor="?attr/colorOnSurfaceVariant"
         android:text="Loading installed apps…"/>
 
     <com.google.android.material.tabs.TabLayout
         android:id="@+id/tabLayout"
+        style="@style/Widget.AppCloner.TabLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:background="?attr/colorSurface"
         app:tabMode="fixed"
-        app:tabGravity="fill"
-        app:tabIndicatorColor="#FF6D00"
-        app:tabSelectedTextColor="#FF6D00"
-        app:tabTextColor="#757575"/>
+        app:tabGravity="fill"/>
 
-    <EditText
-        android:id="@+id/searchEditText"
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/searchLayout"
+        style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginHorizontal="12dp"
         android:layout_marginTop="8dp"
         android:layout_marginBottom="4dp"
         android:hint="Search apps or clones"
-        android:inputType="text"
-        android:imeOptions="actionSearch"
-        android:singleLine="true"
-        android:padding="12dp"
-        android:background="@android:drawable/edit_text"/>
+        app:boxStrokeColor="?attr/colorPrimary"
+        app:hintTextColor="?attr/colorPrimary">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/searchEditText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="text"
+            android:imeOptions="actionSearch"
+            android:singleLine="true"
+            android:textColor="?attr/colorOnSurface"/>
+    </com.google.android.material.textfield.TextInputLayout>
 
     <LinearLayout
         android:orientation="horizontal"
@@ -64,7 +72,8 @@
             android:layout_weight="1"
             android:layout_height="wrap_content"
             android:text="DEX patch"
-            android:textSize="12sp"/>
+            android:textSize="12sp"
+            android:textColor="?attr/colorOnSurface"/>
 
         <com.google.android.material.switchmaterial.SwitchMaterial
             android:id="@+id/fridaSwitch"
@@ -72,11 +81,12 @@
             android:layout_weight="1"
             android:layout_height="wrap_content"
             android:text="Frida"
-            android:textSize="12sp"/>
+            android:textSize="12sp"
+            android:textColor="?attr/colorOnSurface"/>
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/downloadFridaButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
+            style="@style/Widget.AppCloner.Button.TextButton"
             android:layout_width="wrap_content"
             android:layout_height="36dp"
             android:text="Get Frida"
@@ -87,7 +97,8 @@
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1">
+        android:layout_weight="1"
+        android:background="?attr/colorSurface">
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/appListRecycler"
@@ -112,7 +123,7 @@
             android:gravity="center"
             android:padding="24dp"
             android:textSize="15sp"
-            android:textColor="#9E9E9E"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:visibility="gone"
             android:text="No items to show"/>
     </FrameLayout>
@@ -123,11 +134,12 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:indeterminate="true"
-        android:visibility="gone"/>
+        android:visibility="gone"
+        android:indeterminateTint="?attr/colorPrimary"/>
 
-    <Button
+    <com.google.android.material.button.MaterialButton
         android:id="@+id/viewLogsButton"
-        style="@style/Widget.MaterialComponents.Button.TextButton"
+        style="@style/Widget.AppCloner.Button.TextButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="View logs"/>

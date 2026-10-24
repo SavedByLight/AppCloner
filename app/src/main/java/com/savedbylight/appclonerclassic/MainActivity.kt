@@ -17,6 +17,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.appbar.MaterialToolbar
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.switchmaterial.SwitchMaterial
@@ -76,6 +77,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         Logger.init(applicationContext)
+
+        findViewById<MaterialToolbar>(R.id.toolbar)?.let { setSupportActionBar(it) }
 
         progressBar = findViewById(R.id.progressBar)
         statusText = findViewById(R.id.statusText)

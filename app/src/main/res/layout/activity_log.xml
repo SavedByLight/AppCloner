@@ -1,41 +1,50 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:orientation="vertical"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="?attr/colorSurface"
+    android:fitsSystemWindows="true">
 
-    <TextView
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/logToolbar"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:padding="16dp"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:text="Clone Log"/>
+        android:layout_height="?attr/actionBarSize"
+        app:title="Clone Log"
+        app:titleTextColor="?attr/colorOnSurface"/>
 
     <ListView
         android:id="@+id/logListView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:paddingHorizontal="8dp"/>
+        android:paddingHorizontal="8dp"
+        android:divider="?attr/colorOutlineVariant"
+        android:dividerHeight="1dp"/>
 
     <LinearLayout
         android:orientation="horizontal"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="wrap_content"
+        android:padding="8dp">
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/copyLogButton"
+            style="@style/Widget.AppCloner.Button.Tonal"
             android:layout_width="0dp"
             android:layout_weight="1"
             android:layout_height="wrap_content"
+            android:layout_marginEnd="4dp"
             android:text="Copy log"/>
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/clearLogButton"
+            style="@style/Widget.AppCloner.Button.TextButton"
             android:layout_width="0dp"
             android:layout_weight="1"
             android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
             android:text="Clear log"/>
     </LinearLayout>
 </LinearLayout>

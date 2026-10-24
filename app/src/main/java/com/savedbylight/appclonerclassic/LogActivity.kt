@@ -12,6 +12,7 @@ import android.widget.Button
 import android.widget.ListView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.appbar.MaterialToolbar
 
 class LogActivity : AppCompatActivity() {
 
@@ -21,6 +22,10 @@ class LogActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_log)
+        findViewById<MaterialToolbar>(R.id.logToolbar)?.let {
+            setSupportActionBar(it)
+            supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        }
 
         logListView = findViewById(R.id.logListView)
         logAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, mutableListOf())
@@ -175,5 +180,10 @@ class LogActivity : AppCompatActivity() {
             logAdapter.addAll(Logger.all())
             logAdapter.notifyDataSetChanged()
         }
+    }
+
+    override fun onSupportNavigateUp(): Boolean {
+        finish()
+        return true
     }
 }

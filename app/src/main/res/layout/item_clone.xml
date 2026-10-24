@@ -24,7 +24,7 @@
         <TextView
             android:id="@+id/cloneName"
             android:textSize="15sp"
-            android:textColor="#212121"
+            android:textColor="?attr/colorOnSurface"
             android:textStyle="bold"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -34,7 +34,7 @@
         <TextView
             android:id="@+id/clonePackage"
             android:textSize="11sp"
-            android:textColor="#9E9E9E"
+            android:textColor="?attr/colorOnSurfaceVariant"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
@@ -53,37 +53,37 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content">
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/openButton"
-                style="@style/Widget.MaterialComponents.Button.TextButton"
+                style="@style/Widget.AppCloner.Button.TextButton"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
                 android:text="Open"
                 android:textSize="12sp"
-                android:textColor="#FF6D00"
+                android:textColor="?attr/colorPrimary"
                 android:minWidth="0dp"
                 android:paddingHorizontal="8dp"/>
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/shortcutButton"
-                style="@style/Widget.MaterialComponents.Button.TextButton"
+                style="@style/Widget.AppCloner.Button.TextButton"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"
                 android:text="Shortcut"
                 android:textSize="12sp"
-                android:textColor="#1565C0"
+                android:textColor="?attr/colorSecondary"
                 android:minWidth="0dp"
                 android:paddingHorizontal="8dp"/>
         </LinearLayout>
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/uninstallButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
+            style="@style/Widget.AppCloner.Button.TextButton"
             android:layout_width="wrap_content"
             android:layout_height="32dp"
             android:text="Remove"
             android:textSize="12sp"
-            android:textColor="#E53935"
+            android:textColor="?attr/colorError"
             android:minWidth="0dp"
             android:paddingHorizontal="8dp"/>
     </LinearLayout>
