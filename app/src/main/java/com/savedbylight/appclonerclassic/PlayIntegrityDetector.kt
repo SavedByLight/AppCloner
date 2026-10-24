@@ -20,6 +20,9 @@ object PlayIntegrityDetector {
         "com.xai.grok",               // Grok (if/when released)
         "com.openai.chatgpt",         // ChatGPT
         "com.snapchat.android",       // Snapchat
+        "com.google.android.gms",       // Play services
+        "com.google.android.gsf",       // Google Services Framework
+        "com.android.vending",          // Play Store
         "com.instagram.android",      // Instagram (some flows)
         "com.whatsapp",               // WhatsApp (registration)
         "com.facebook.katana",        // Facebook

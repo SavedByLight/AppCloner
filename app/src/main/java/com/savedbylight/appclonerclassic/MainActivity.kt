@@ -49,14 +49,27 @@ class MainActivity : AppCompatActivity() {
 
     private var currentTab = 0 // 0 = Clone New, 1 = My Clones
 
-    // Packages we never offer to clone (signature / Play Integrity tied)
+    // Prefixes we never offer to clone (except allowlisted Google/Play packages below).
     private val excludedPackagePrefixes = listOf(
-        "com.google.",
-        "com.android.vending",
         "com.android.chrome",
         "com.chrome.beta",
         "com.chrome.dev",
         "com.chrome.canary"
+    )
+
+    /**
+     * Google / Play stack packages that may be cloned (standalone or ROM profile).
+     * These are often FLAG_SYSTEM, so they must be allowlisted past the user-app filter.
+     * Prefer ROM profile for real dual-account use; standalone changes package + cert.
+     */
+    private val allowedGooglePackages = setOf(
+        "com.google.android.gms",           // Google Play services
+        "com.google.android.gsf",           // Google Services Framework
+        "com.google.android.gsf.login",     // Google account login (some devices)
+        "com.google.android.gms.policy_sidecar_aps",
+        "com.android.vending",              // Google Play Store
+        "com.google.android.play.games",    // Play Games
+        "com.google.android.instantapps.supervisor"
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -234,14 +247,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun isExcludedFromCloning(packageName: String): Boolean =
-        excludedPackagePrefixes.any { packageName.startsWith(it) }
+    private fun isAllowedGooglePackage(packageName: String): Boolean =
+        packageName in allowedGooglePackages
+
+    private fun isExcludedFromCloning(packageName: String): Boolean {
+        if (isAllowedGooglePackage(packageName)) return false
+        // Block other com.google.* unless explicitly allowlisted
+        if (packageName.startsWith("com.google.")) return true
+        return excludedPackagePrefixes.any { packageName.startsWith(it) }
+    }
 
     private fun loadUserApps(): List<InstalledApp> {
         val pm = packageManager
         val cloneCounts = countClonesByBase()
         return pm.getInstalledApplications(PackageManager.GET_META_DATA)
-            .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 }
+            .filter { ai ->
+                val isSystem = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                // User apps, or allowlisted Google/Play system packages
+                !isSystem || isAllowedGooglePackage(ai.packageName)
+            }
             .filter { it.packageName != packageName }
             .filter { !isExcludedFromCloning(it.packageName) }
             .filter { !CloneUtils.isStealthClone(this, it.packageName) }
